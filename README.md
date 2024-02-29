@@ -43,6 +43,18 @@ Activate the virtual environment:
 source .venv/bin/activate
 ```
 
+### Install Apache Airflow
+
+The project uses the [Apache Airflow](https://airflow.apache.org) system. To install it, please follow the [guide](https://airflow.apache.org/docs/apache-airflow/stable/start.html) provided on the Apache Airflow documentation.
+
+Once installation is complete, edit `$AIRFLOW_HOME/airflow.cfg` file to enable Airflow to discover the workflows implemented in the `src/armonik_bench` project directory. To do so, replace the dag directory property as follow:
+
+```bash
+dags_folder = /path/to/project/src/armonik_bench
+```
+
+You can then finalize the project installation by following the instructions in the following sections.
+
 ### Installing the project using pip
 
 Once the virtual environment is activated, you can install the project using pip.
@@ -72,8 +84,6 @@ For development, you might want to install additional packages for testing, lint
 ```bash
 pip install -e .[dev,tests]
 ```
-
-
 
 ## Contributing
 
