@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools",
+            "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "armonik_bench"
+description = "Set of tools for benchmarking performance on ArmoniK."
+dynamic = ["version"]
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["ArmoniK", "task graph", "benchmarking", "HPC"]
+license = {text = "Apache Software License 2.0"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/aneoconsulting/Armonik.Bench"
+repository = "https://github.com/aneoconsulting/Armonik.Bench"
+"Bug Tracker" = "https://github.com/aneoconsulting/Armonik.Bench/issues"
+
+[tool.setuptools]
+include-package-data = true
+dynamic = {version = {attr = "armonik_bench.__version__"}}
+
+[tool.setuptools.packages.find]
+where= ["src"]
+exclude=['tests']
+
+[tool.setuptools.package-data]
+"*" = ["*.pyi"]
+
+[project.optional-dependencies]
+dev = [
+    'mypy',
+    'ruff'
+]
+tests = [
+  'coverage',
+  'pytest',
+  'pytest-cov',
+  'pytest-benchmark[histogram]',
+]
