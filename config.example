@@ -1,0 +1,19 @@
+{
+    "release": "0.2.0",
+    "environment": "gcp",
+    "instance_name": "airflow-bench-client",
+    "instance_zone": "us-central1-a",
+    "instance_region": "us-central1",
+    "infra_region": "us-central1",
+    "machine_type": "c3d-standard-4",
+    "nodes": [1, 4, 8, 12],
+    "workloads": [
+        {
+            "n_tasks": 1000000,
+            "sub_tasks_levels": 100,
+            "total_calculation_time": null,
+            "data_size": null,
+            "task_rpc_exception": false
+        }
+    ]
+}
