@@ -14,7 +14,12 @@ license = {text = "Apache Software License 2.0"}
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
-dependencies = []
+dependencies = [
+    'apache-airflow',
+    'apache-airflow-providers-github',
+    'apache-airflow-providers-grpc',
+    'armonik',
+]
 
 [project.urls]
 Homepage = "https://github.com/aneoconsulting/Armonik.Bench"
