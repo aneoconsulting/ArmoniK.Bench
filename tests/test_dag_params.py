@@ -1,5 +1,7 @@
 import copy
 
+import pytest
+
 from airflow.models import DagBag
 
 
@@ -19,6 +21,7 @@ RUNNER_CONF = {
 }
 
 
+@pytest.skip(reason="requires an Airflow environment", allow_module_level=True)
 def test_run_experiment_params():
     dag_bag = DagBag(include_examples=False)
     dag = dag_bag.get_dag("armonik-run-experiment")
@@ -27,6 +30,7 @@ def test_run_experiment_params():
     copied_params.validate()
 
 
+@pytest.skip(reason="requires an Airflow environment", allow_module_level=True)
 def test_runner_params():
     dag_bag = DagBag(include_examples=False)
     dag = dag_bag.get_dag("armonik-benchmark-runner")

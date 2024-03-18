@@ -48,7 +48,9 @@ dev = [
 ]
 tests = [
   'coverage',
+  'kubernetes',
   'pytest',
   'pytest-cov',
   'pytest-benchmark[histogram]',
+  'pytest-mock',
 ]

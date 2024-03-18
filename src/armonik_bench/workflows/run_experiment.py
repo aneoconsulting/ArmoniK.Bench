@@ -157,7 +157,7 @@ def experiment_dag():
     run_client_localhost = DockerOperator(
         task_id="run-client-localhost",
         image="{{ params.workload }}",
-        auto_remove=True,
+        auto_remove="success",
         xcom_all=True,
         environment="{{ ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config') }}",
     )

@@ -1,6 +1,7 @@
 import json
 
 import docker
+import pytest
 
 from kubernetes import client, config
 
@@ -84,6 +85,7 @@ CONFIG = {
 }
 
 
+@pytest.skip(reason="requires an Airflow environment", allow_module_level=True)
 def test_armonik_deploy_cluster(mock_context):
     op = ArmoniKDeployClusterOperator(
         task_id="test-deploy-cluster", release=RELEASE, environment=ENVIRONMENT, config=CONFIG
@@ -126,6 +128,7 @@ def test_armonik_deploy_cluster(mock_context):
     assert outputs["session"]
 
 
+@pytest.skip(reason="requires an Airflow environment", allow_module_level=True)
 def test_armonik_destroy_cluster(mock_context):
     op = ArmoniKDestroyClusterOperator(
         task_id="test-destroy-cluster", release=RELEASE, environment=ENVIRONMENT, config=CONFIG
