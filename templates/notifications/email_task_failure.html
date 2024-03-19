@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Airflow Task Execution Failed</title>
+</head>
+<body>
+    <h2>Airflow Task Execution Failed</h2>
+    <p>The task <strong>{{ ti.task_id }}</strong> in DAG <strong>{{ dag.dag_id }}</strong> has failed.</p>
+    <p>Date: {{ data_interval_start.isoformat() }}</p>
+    <p>Error: {{ exception }}</p>
+    <p>
+        You can view more details and logs in the Airflow Dashboard:
+        <ul>
+            <li><a href="{{conf.get('webserver', 'BASE_URL')}}/dags/{{dag.dag_id}}/grid">DAG run</a>.</li>
+            <li><a href="{{ ti.log_url }}">Task logs</a>.</li>
+        </ul>        
+    </p>
+</body>
+</html>
