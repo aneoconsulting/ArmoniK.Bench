@@ -50,6 +50,11 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
             description="Reference to an existing or to be created gRPC Connection.",
             type="string",
         ),
+        "kubernetes_conn_id": Param(
+            default="kubernetes_default",
+            description="Reference to an existing or to be created Kubernetes Connection.",
+            type="string",
+        ),
         "github_conn_id": Param(
             default="github_default",
             description="Reference to a pre-defined GitHub Connection.",
@@ -154,41 +159,11 @@ def runner_dag():
 
     deploy_client = deploy_client()
 
-    # @task(task_id="run-experiments", trigger_rule="one_success")
-    # def run_experiments(**context) -> None:
-    #     logger = logging.getLogger("airflow.task")
-    #     campaign_data = context["task_instance"].xcom_pull(task_ids="load-campaign")
-    #     for experiment in campaign_data["experiments"]:
-    #         logger.info(f"Running experiment {experiment['name']}")
-    #         TriggerDagRunOperator(
-    #             task_id=f"run-experiment-{experiment['name']}",
-    #             trigger_dag_id="armonik-run-experiment",
-    #             reset_dag_run=True,
-    #             wait_for_completion=True,
-    #             poke_interval=10,
-    #             allowed_states=["success"],
-    #             conf={
-    #                 "exp_name": experiment["name"],
-    #                 "release": campaign_data["release"],
-    #                 "environment": campaign_data["environment"],
-    #                 "infra_region": experiment["infrastructure"]["region"],
-    #                 "infra_config": experiment["infrastructure"]["config"],
-    #                 "workload": experiment["workload"]["image"],
-    #                 "workload_config": experiment["workload"]["config"],
-    #                 "client_instance_name": campaign_data["client"]["instance_name"],
-    #                 "client_instance_zone": campaign_data["client"]["instance_zone"],
-    #                 "armonik_conn_id": context["params"]["armonik_conn_id"],
-    #                 "github_conn_id": context["params"]["github_conn_id"],
-    #                 "bucket_prefix": context["params"]["bucket_prefix"],
-    #                 "gcp_conn_id": context["params"]["gcp_conn_id"],
-    #             },
-    #         ).execute(context)
-
     run_experiments = RunExperiment(
         task_id="run-experiments",
         campaign_data="{{ ti.xcom_pull(task_ids='load-campaign')}}",
-        stop_on_failure=False,
-        allowed_failures=5,
+        stop_on_failure=True,
+        allowed_failures=0,
         poke_interval=10,
         trigger_rule="one_success",
     )
