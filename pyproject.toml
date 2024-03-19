@@ -24,6 +24,7 @@ dependencies = [
     'armonik>=3.16.1',
     'armonik_analytics',
     'psycopg2',
+    'PyYAML',
 ]
 
 [project.urls]

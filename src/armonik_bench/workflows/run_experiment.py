@@ -6,16 +6,18 @@ from datetime import datetime
 
 import numpy as np
 
-from airflow.decorators import dag, task
+from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowFailException, AirflowException
 from airflow.io.path import ObjectStoragePath
 from airflow.models.connection import Connection
 from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
+from airflow.providers.cncf.kubernetes.hooks.kubernetes import KubernetesHook
 from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.google.cloud.hooks.compute_ssh import ComputeEngineSSHHook
 from airflow.providers.grpc.hooks.grpc import GrpcHook
 from airflow.providers.ssh.operators.ssh import SSHOperator
+from airflow.sensors.base import PokeReturnValue
 from armonik.client import ArmoniKHealthChecks
 from armonik.common import ServiceHealthCheckStatus
 from armonik.client import ArmoniKTasks, TaskFieldFilter
@@ -99,6 +101,11 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
             description="Reference to an existing or to be created gRPC Connection.",
             type="string",
         ),
+        "kubernetes_conn_id": Param(
+            default="kubernetes_default",
+            description="Reference to an existing or to be created Kubernetes Connection.",
+            type="string",
+        ),
         "github_conn_id": Param(
             default="github_default",
             description="Reference to a pre-defined GitHub Connection.",
@@ -126,6 +133,7 @@ def experiment_dag():
         region="{{ params.infra_region }}",
         config="{{ params.infra_config }}",
         armonik_conn_id="{{ params.armonik_conn_id }}",
+        kubernetes_conn_id="{{ params.kubernetes_conn_id }}",
         github_conn_id="{{ params.github_conn_id }}",
         bucket_prefix="{{ params.bucket_prefix }}",
     )
@@ -181,19 +189,38 @@ def experiment_dag():
         environment="{{ ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config') }}",
     )
 
-    run_client_gcp = SSHOperator(
-        task_id="run-client-gcp",
-        ssh_hook=ComputeEngineSSHHook(
-            user="username",
-            instance_name="{{ params.client_instance_name }}",
-            zone="{{ params.client_instance_location }}",
-            use_oslogin=False,
-            use_iap_tunnel=False,
-            cmd_timeout=1,
-            gcp_conn_id="{{ params.gcp_conn_id }}",
-        ),
-        command="docker run --rm \\ {% for key, value in ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config').items() %} -e {{ key }}={{ value }} \\ {% endfor %} {{ params.workload }}",
-    )
+    @task_group
+    def run_client_gcp():
+        @task.sensor(task_id="wait-for-cluster-nodes", poke_interval=5, timeout=600, mode="poke")
+        def wait_for_cluster_nodes(params: dict[str, any]):
+            n_nodes = params["infra_config"]["gke"]["node_pools"][0]["node_count"]
+            logger = logging.getLogger("airflow.task")
+            logger.info(f"Waiting for the {n_nodes} nodes to be available...")
+            hook = KubernetesHook(conn_id=params["kubernetes_conn_id"])
+            node_names = [node.metadata.name for node in hook.core_v1_client.list_node().items]
+            if n_nodes == len(node_names):
+                logger.info("All the nodes are available.")
+                return PokeReturnValue(is_done=True, xcom_value=node_names)
+            logger.info(f"{n_nodes - len(node_names)} nodes are still not available.")
+            return PokeReturnValue(is_done=False)
+
+        wait_for_cluster_nodes = wait_for_cluster_nodes()
+        
+        run_client = SSHOperator(
+            task_id="run-client-gcp",
+            ssh_hook=ComputeEngineSSHHook(
+                user="username",
+                instance_name="{{ params.client_instance_name }}",
+                zone="{{ params.client_instance_location }}",
+                use_oslogin=False,
+                use_iap_tunnel=False,
+                cmd_timeout=1,
+                gcp_conn_id="{{ params.gcp_conn_id }}",
+            ),
+            command="docker run --rm \\ {% for key, value in ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config').items() %} -e {{ key }}={{ value }} \\ {% endfor %} {{ params.workload }}",
+        )
+
+        wait_for_cluster_nodes >> run_client
 
     @task(task_id="parse-client-output", trigger_rule="one_success")
     def parse_client_output(ti: TaskInstance, params: dict[str, str]) -> None:

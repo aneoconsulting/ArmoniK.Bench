@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+import yaml
 
 from airflow import settings
 from airflow.exceptions import AirflowNotFoundException, AirflowException
@@ -33,6 +34,7 @@ class BaseArmoniKClusterOperator(BashOperator):
         region: str,
         config: dict | str,
         armonik_conn_id: str,
+        kubernetes_conn_id: str,
         github_conn_id: str,
         bucket_prefix: str,
         **kwargs,
@@ -42,6 +44,7 @@ class BaseArmoniKClusterOperator(BashOperator):
         self.region = region
         self.config = config
         self.armonik_conn_id = armonik_conn_id
+        self.kubernetes_conn_id = kubernetes_conn_id
         self.github_conn_id = github_conn_id
         self.bucket_prefix = bucket_prefix
         super().__init__(
@@ -154,7 +157,18 @@ class ArmoniKDeployClusterOperator(BaseArmoniKClusterOperator):
         )
         super().execute(context)
 
-    def set_connection(self):
+    def _create_or_update_connection(self, conn_id: str):
+        try:
+            conn = Connection.get_connection_from_secrets(conn_id=conn_id)
+            self.log.info(
+                f"Connection {conn_id} alread exists and will be overwritten."
+            )
+        except AirflowNotFoundException:
+            conn = Connection(conn_id=conn_id)
+            self.log.info(f"Connection {conn_id} created.")
+        return conn
+
+    def set_armonik_connection(self):
         output_path = (
             Path(self.cwd)
             / f"ArmoniK/infrastructure/quick-deploy/{self.environment}/all-in-one/generated/armonik-output.json"
@@ -170,15 +184,9 @@ class ArmoniKDeployClusterOperator(BaseArmoniKClusterOperator):
                 host = url
                 port = None
         self.log.info(f"Get host {host} and port {port} from armonik-outputs.json.")
+
         session = settings.Session()
-        try:
-            conn = Connection.get_connection_from_secrets(conn_id=self.armonik_conn_id)
-            self.log.info(
-                f"Connection {self.armonik_conn_id} alread exists and will be overwritten."
-            )
-        except AirflowNotFoundException:
-            conn = Connection(conn_id=self.armonik_conn_id)
-            self.log.info(f"Connection {self.armonik_conn_id} created.")
+        conn = self._create_or_update_connection(self.armonik_conn_id)
         conn.conn_type = "grpc"
         conn.host = host
         conn.port = port
@@ -188,12 +196,33 @@ class ArmoniKDeployClusterOperator(BaseArmoniKClusterOperator):
         session.commit()
         self.log.info(f"Connection {self.armonik_conn_id} added to database.")
 
+    def set_kubernetes_connection(self):
+        # Get kubeconfig file
+        if self.environment == "localhost":
+            kube_config_file = Path.home() / ".kube/config"
+        else:
+            kube_config_file = Path(self.cwd) / f"ArmoniK/infrastructure/quick-deploy/{self.environment}/generated/kubeconfig"
+        with kube_config_file.open() as file:
+            kube_config = yaml.safe_load(file)
+
+        session = settings.Session()
+        conn = self._create_or_update_connection(self.kubernetes_conn_id)
+        conn.conn_type = "kubernetes"
+        conn.description = "Kubernetes connection for a remote ArmoniK cluster"
+        conn.extra = json.dumps({
+            "in_cluster": False,
+            "kube_config": kube_config,
+        })
+        session.add(conn)
+        session.commit()
+        self.log.info(f"Connection {self.kubernetes11_conn_id} added to database.")
+
     def execute(self, context: Context):
         self.check_release()
         self.clone_repo(context)
         self.replace_default_parameters_file()
         self.deploy(context)
-        self.set_connection()
+        self.set_armonik_connection()
         self.clean_up(context)
 
 
