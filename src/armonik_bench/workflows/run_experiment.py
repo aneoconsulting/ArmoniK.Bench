@@ -29,6 +29,7 @@ from armonik_analytics.metrics import (
 from armonik_analytics.utils import TaskTimestamps
 from grpc import RpcError
 
+from notifications.notifier import ArmoniKBenchEmailNotifier
 from operators.armonik import ArmoniKDeployClusterOperator
 
 
@@ -39,7 +40,25 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
     dag_id="armonik-run-experiment",
     description="Workflow for running a given workload from an existing client on a given infrastructure.",
     schedule=None,
+    max_active_runs=1,
     render_template_as_native_obj=True,
+    template_searchpath=os.environ["AIRFLOW_TEMPLATE_SEARCHPATH"],
+    on_success_callback=ArmoniKBenchEmailNotifier(
+        aws_conn_id="aws_default",
+        target_arn=os.environ["AIRFLOW_AWS_SNS_ARN"],
+        message="./notifications/email_dag_success.html",
+        subject="Airflow DAG execution success",
+        region_name=os.environ["AIRFLOW_AWS_SNS_REGION"],
+    ),
+    default_args={
+        "on_failure_callback": ArmoniKBenchEmailNotifier(
+            aws_conn_id="aws_default",
+            target_arn=os.environ["AIRFLOW_AWS_SNS_ARN"],
+            message="./notifications/email_task_failure.html",
+            subject="Airflow Task execution failure",
+            region_name=os.environ["AIRFLOW_AWS_SNS_REGION"],
+        )
+    },
     params={
         "exp_name": Param(
             description="Name of the experiment to be run.",

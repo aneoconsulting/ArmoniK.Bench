@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from hashlib import sha256
 
@@ -8,14 +7,15 @@ from airflow.io.path import ObjectStoragePath
 from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
 from airflow.operators.empty import EmptyOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.google.cloud.operators.compute import (
     ComputeEngineDeleteInstanceOperator,
     ComputeEngineInsertInstanceOperator,
     ComputeEngineStartInstanceOperator,
 )
 
+from notifications.notifier import ArmoniKBenchEmailNotifier
 from operators.armonik import ArmoniKDestroyClusterOperator
+from operators.run_experiment import RunExperiment
 
 
 base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
@@ -25,7 +25,25 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
     dag_id="armonik-benchmark-runner",
     description="Workflow for running a given workload from an existing client on a given infrastructure.",
     schedule=None,
+    max_active_runs=1,
     render_template_as_native_obj=True,
+    template_searchpath=os.environ["AIRFLOW_TEMPLATE_SEARCHPATH"],
+    on_success_callback=ArmoniKBenchEmailNotifier(
+        aws_conn_id="aws_default",
+        target_arn=os.environ["AIRFLOW_AWS_SNS_ARN"],
+        message="./notifications/email_dag_success.html",
+        subject="Airflow DAG execution success",
+        region_name=os.environ["AIRFLOW_AWS_SNS_REGION"],
+    ),
+    default_args={
+        "on_failure_callback": ArmoniKBenchEmailNotifier(
+            aws_conn_id="aws_default",
+            target_arn=os.environ["AIRFLOW_AWS_SNS_ARN"],
+            message="./notifications/email_task_failure.html",
+            subject="Airflow Task execution failure",
+            region_name=os.environ["AIRFLOW_AWS_SNS_REGION"],
+        )
+    },
     params={
         "armonik_conn_id": Param(
             default="armonik_default",
@@ -136,37 +154,44 @@ def runner_dag():
 
     deploy_client = deploy_client()
 
-    @task(task_id="run-experiments", trigger_rule="one_success")
-    def run_experiments(**context) -> None:
-        logger = logging.getLogger("airflow.task")
-        campaign_data = context["task_instance"].xcom_pull(task_ids="load-campaign")
-        for experiment in campaign_data["experiments"]:
-            logger.info(f"Running experiment {experiment['name']}")
-            TriggerDagRunOperator(
-                task_id=f"run-experiment-{experiment['name']}",
-                trigger_dag_id="armonik-run-experiment",
-                reset_dag_run=True,
-                wait_for_completion=True,
-                poke_interval=10,
-                allowed_states=["success"],
-                conf={
-                    "exp_name": experiment["name"],
-                    "release": campaign_data["release"],
-                    "environment": campaign_data["environment"],
-                    "infra_region": experiment["infrastructure"]["region"],
-                    "infra_config": experiment["infrastructure"]["config"],
-                    "workload": experiment["workload"]["image"],
-                    "workload_config": experiment["workload"]["config"],
-                    "client_instance_name": campaign_data["client"]["instance_name"],
-                    "client_instance_zone": campaign_data["client"]["instance_zone"],
-                    "armonik_conn_id": context["params"]["armonik_conn_id"],
-                    "github_conn_id": context["params"]["github_conn_id"],
-                    "bucket_prefix": context["params"]["bucket_prefix"],
-                    "gcp_conn_id": context["params"]["gcp_conn_id"],
-                },
-            ).execute(context)
+    # @task(task_id="run-experiments", trigger_rule="one_success")
+    # def run_experiments(**context) -> None:
+    #     logger = logging.getLogger("airflow.task")
+    #     campaign_data = context["task_instance"].xcom_pull(task_ids="load-campaign")
+    #     for experiment in campaign_data["experiments"]:
+    #         logger.info(f"Running experiment {experiment['name']}")
+    #         TriggerDagRunOperator(
+    #             task_id=f"run-experiment-{experiment['name']}",
+    #             trigger_dag_id="armonik-run-experiment",
+    #             reset_dag_run=True,
+    #             wait_for_completion=True,
+    #             poke_interval=10,
+    #             allowed_states=["success"],
+    #             conf={
+    #                 "exp_name": experiment["name"],
+    #                 "release": campaign_data["release"],
+    #                 "environment": campaign_data["environment"],
+    #                 "infra_region": experiment["infrastructure"]["region"],
+    #                 "infra_config": experiment["infrastructure"]["config"],
+    #                 "workload": experiment["workload"]["image"],
+    #                 "workload_config": experiment["workload"]["config"],
+    #                 "client_instance_name": campaign_data["client"]["instance_name"],
+    #                 "client_instance_zone": campaign_data["client"]["instance_zone"],
+    #                 "armonik_conn_id": context["params"]["armonik_conn_id"],
+    #                 "github_conn_id": context["params"]["github_conn_id"],
+    #                 "bucket_prefix": context["params"]["bucket_prefix"],
+    #                 "gcp_conn_id": context["params"]["gcp_conn_id"],
+    #             },
+    #         ).execute(context)
 
-    run_experiments = run_experiments()
+    run_experiments = RunExperiment(
+        task_id="run-experiments",
+        campaign_data="{{ ti.xcom_pull(task_ids='load-campaign')}}",
+        stop_on_failure=False,
+        allowed_failures=5,
+        poke_interval=10,
+        trigger_rule="one_success",
+    )
 
     dump_db = EmptyOperator(task_id="dump-db")
 
