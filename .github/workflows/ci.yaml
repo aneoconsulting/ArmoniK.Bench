@@ -7,6 +7,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  AIRFLOW_OBJECT_STORAGE_PATH: ~/data
+
 jobs:
   lint-format:
     name: Check linting and formatting

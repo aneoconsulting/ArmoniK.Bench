@@ -1,6 +1,8 @@
 import json
 
 from pathlib import Path
+from typing import Sequence
+
 
 from airflow import settings
 from airflow.exceptions import AirflowNotFoundException, AirflowException
@@ -12,14 +14,24 @@ from github import GithubException, Repository, UnknownObjectException
 
 
 class BaseArmoniKClusterOperator(BashOperator):
+    template_fields: Sequence[str] = (
+        "release",
+        "environment",
+        "region",
+        "config",
+        "armonik_conn_id",
+        "github_conn_id",
+        "bucket_prefix",
+    )
     __armonik_github_repo_full_name = "aneoconsulting/ArmoniK"
 
     def __init__(
         self,
+        *,
         release: str,
         environment: str,
         region: str,
-        config: str,
+        config: dict | str,
         armonik_conn_id: str,
         github_conn_id: str,
         bucket_prefix: str,
@@ -32,14 +44,8 @@ class BaseArmoniKClusterOperator(BashOperator):
         self.armonik_conn_id = armonik_conn_id
         self.github_conn_id = github_conn_id
         self.bucket_prefix = bucket_prefix
-        self.outputs = {}
         super().__init__(
             bash_command="",
-            env={
-                "PREFIX": self.bucket_prefix,
-                "REGION": self.region,
-                "PARAMETERS_FILE": "parameters.tfvars.json",
-            },
             append_env=True,
             cwd=str(Path.cwd()),
             **kwargs,
@@ -74,6 +80,11 @@ class BaseArmoniKClusterOperator(BashOperator):
             raise AirflowException(f"GitHub operator error: {e}")
 
     def clone_repo(self, context: Context):
+        self.env = {
+            "PREFIX": self.bucket_prefix,
+            "REGION": self.region,
+            "PARAMETERS_FILE": "parameters.tfvars.json",
+        }
         self.bash_command = (
             f"git clone --depth 1 -b {self.release} https://github.com/aneoconsulting/ArmoniK.git"
         )
@@ -97,17 +108,35 @@ class BaseArmoniKClusterOperator(BashOperator):
 
 
 class ArmoniKDeployClusterOperator(BaseArmoniKClusterOperator):
+    template_fields: Sequence[str] = (
+        "release",
+        "environment",
+        "region",
+        "config",
+        "armonik_conn_id",
+        "github_conn_id",
+        "bucket_prefix",
+    )
+
     def __init__(
         self,
+        *,
         release: str,
         environment: str,
-        config: str,
+        config: dict | str,
         region: str = "europ-west1",
         armonik_conn_id: str = "armonik_default",
         github_conn_id: str = "github_default",
         bucket_prefix: str = "airflow-bench",
         **kwargs,
     ) -> None:
+        self.release = release
+        self.environment = environment
+        self.region = region
+        self.config = config
+        self.armonik_conn_id = armonik_conn_id
+        self.github_conn_id = github_conn_id
+        self.bucket_prefix = bucket_prefix
         super().__init__(
             release=release,
             environment=environment,
@@ -160,17 +189,28 @@ class ArmoniKDeployClusterOperator(BaseArmoniKClusterOperator):
         self.log.info(f"Connection {self.armonik_conn_id} added to database.")
 
     def execute(self, context: Context):
-        super().check_release()
-        super().clone_repo(context)
-        super().replace_default_parameters_file()
+        self.check_release()
+        self.clone_repo(context)
+        self.replace_default_parameters_file()
         self.deploy(context)
         self.set_connection()
-        super().clean_up(context)
+        self.clean_up(context)
 
 
 class ArmoniKDestroyClusterOperator(BaseArmoniKClusterOperator):
+    template_fields: Sequence[str] = (
+        "release",
+        "environment",
+        "region",
+        "config",
+        "armonik_conn_id",
+        "github_conn_id",
+        "bucket_prefix",
+    )
+
     def __init__(
         self,
+        *,
         release: str,
         environment: str,
         config: str,
@@ -180,6 +220,13 @@ class ArmoniKDestroyClusterOperator(BaseArmoniKClusterOperator):
         bucket_prefix: str = "airflow-bench",
         **kwargs,
     ) -> None:
+        self.release = release
+        self.environment = environment
+        self.region = region
+        self.config = config
+        self.armonik_conn_id = armonik_conn_id
+        self.github_conn_id = github_conn_id
+        self.bucket_prefix = bucket_prefix
         super().__init__(
             release=release,
             environment=environment,

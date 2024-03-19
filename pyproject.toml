@@ -15,10 +15,14 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    'apache-airflow',
+    'apache-airflow[google]',
+    'apache-airflow-providers-docker',
     'apache-airflow-providers-github',
     'apache-airflow-providers-grpc',
-    'armonik',
+    'apache-airflow-providers-ssh',
+    'armonik>=3.16.1',
+    'armonik_analytics',
+    'psycopg2',
 ]
 
 [project.urls]
@@ -44,7 +48,9 @@ dev = [
 ]
 tests = [
   'coverage',
+  'kubernetes',
   'pytest',
   'pytest-cov',
   'pytest-benchmark[histogram]',
+  'pytest-mock',
 ]
