@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Airflow DAG Execution Successful</title>
+</head>
+<body>
+    <h2>Airflow DAG Execution Successful</h2>
+    <p>The DAG <strong>{{ dag.dag_id }}</strong> has been successfully executed.</p>
+    <p>Date: {{ data_interval_start.isoformat() }}</p>
+    <p>
+        You can view more details and logs of this DAG run in the <a href="{{conf.get('webserver', 'BASE_URL')}}/dags/{{dag.dag_id}}/grid">Airflow Dashboard</a>.
+    </p>
+</body>
+</html>
