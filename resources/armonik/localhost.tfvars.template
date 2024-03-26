@@ -1,0 +1,134 @@
+# Logging level
+logging_level = "Information"
+
+# Uncomment to deploy metrics server
+#metrics_server = {}
+
+# Object storage
+# Uncomment either the `redis`, the `minio`or the `nfs` parameter
+redis = {}
+#minio = {}
+# nfs = {
+#   server     = "172.30.37.125"
+#   path       = "/srv/files"
+# }
+# Uncomment this to have minio S3 enabled instead of hostpath shared_storage
+#minio_s3_fs = {} # Shared storage
+
+# Queue
+activemq = {}
+
+metrics_exporter = {
+  extra_conf = {
+    MongoDB__AllowInsecureTls              = true
+    Serilog__MinimumLevel                  = "Information"
+    MongoDB__TableStorage__PollingDelayMin = "00:00:01"
+    MongoDB__TableStorage__PollingDelayMax = "00:00:10"
+    MongoDB__DataRetention                 = "1.00:00:00"
+  }
+}
+
+# Parameters of control plane
+control_plane = {
+  limits = {
+    cpu    = "1000m"
+    memory = "2048Mi"
+  }
+  requests = {
+    cpu    = "50m"
+    memory = "50Mi"
+  }
+  default_partition = "default"
+}
+
+# Parameters of admin GUI
+admin_gui = {
+  limits = {
+    cpu    = "1000m"
+    memory = "1024Mi"
+  }
+  requests = {
+    cpu    = "100m"
+    memory = "128Mi"
+  }
+  node_selector = { service = "monitoring" }
+}
+
+# Parameters of the compute plane
+compute_plane = {
+  # Partition for the htcmock worker
+  htcmock = {
+    # number of replicas for each deployment of compute plane
+    replicas = {{ n_nodes }}
+    # ArmoniK polling agent
+    polling_agent = {
+      limits = {
+        cpu    = "2000m"
+        memory = "2048Mi"
+      }
+      requests = {
+        cpu    = "50m"
+        memory = "50Mi"
+      }
+    }
+    # ArmoniK workers
+    worker = [
+      {
+        image = "dockerhubaneo/armonik_core_htcmock_test_worker"
+        limits = {
+          cpu    = "1000m"
+          memory = "1024Mi"
+        }
+        requests = {
+          cpu    = "50m"
+          memory = "50Mi"
+        }
+      }
+    ]
+  }
+}
+
+# Deploy ingress
+# PS: to not deploy ingress put: "ingress=null"
+ingress = {
+  tls                  = false
+  mtls                 = false
+  generate_client_cert = false
+}
+
+extra_conf = {
+  core = {
+    Amqp__AllowHostMismatch                    = true
+    Amqp__MaxPriority                          = "10"
+    Amqp__MaxRetries                           = "5"
+    Amqp__QueueStorage__LockRefreshPeriodicity = "00:00:45"
+    Amqp__QueueStorage__PollPeriodicity        = "00:00:10"
+    Amqp__QueueStorage__LockRefreshExtension   = "00:02:00"
+    MongoDB__TableStorage__PollingDelayMin     = "00:00:01"
+    MongoDB__TableStorage__PollingDelayMax     = "00:00:10"
+    MongoDB__AllowInsecureTls                  = true
+    MongoDB__TableStorage__PollingDelay        = "00:00:01"
+    MongoDB__DataRetention                     = "1.00:00:00"
+    Redis__Timeout                             = 30000
+    Redis__SslHost                             = "127.0.0.1"
+    Redis__TtlTimeSpan                         = "1.00:00:00"
+  }
+  control = {
+    Submitter__MaxErrorAllowed = 50
+  }
+  worker = {
+    target_zip_path = "/tmp"
+  }
+}
+
+# Extra configuration for jobs connecting to database
+jobs_in_database_extra_conf = { MongoDB__DataRetention = "1.00:00:00" }
+
+environment_description = {
+  name        = "local-dev"
+  version     = "0.0.0"
+  description = "Local development environment"
+  color       = "blue"
+}
+
+chaos_mesh = {}

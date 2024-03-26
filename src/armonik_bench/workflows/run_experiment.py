@@ -13,6 +13,7 @@ from airflow.models.connection import Connection
 from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
 from airflow.providers.cncf.kubernetes.hooks.kubernetes import KubernetesHook
+from airflow.providers.cncf.kubernetes.operators.job import KubernetesJobOperator
 from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.google.cloud.hooks.compute_ssh import ComputeEngineSSHHook
 from airflow.providers.grpc.hooks.grpc import GrpcHook
@@ -138,7 +139,7 @@ def experiment_dag():
         bucket_prefix="{{ params.bucket_prefix }}",
     )
 
-    @task(task_id="check-cluster-health")
+    @task.sensor(task_id="check-cluster-health", poke_interval=10, timeout=600, mode="poke")
     def check_cluster_health(params: dict[str, str]) -> None:
         try:
             logger = logging.getLogger("airflow.task")
@@ -150,11 +151,11 @@ def experiment_dag():
                     if health["status"] == ServiceHealthCheckStatus.HEALTHY:
                         logger.info(f"Service {name} is healthy.")
                     else:
-                        raise AirflowFailException(
-                            f"Service {name} is {health['status']}: {health['message']}."
-                        )
-        except RpcError as rpc_error:
-            raise AirflowFailException(f"Failed to run cluster health checks, error: {rpc_error}")
+                        logger.info(f"Service {name} is not yet healthy.")
+                        return PokeReturnValue(is_done=False)
+                    return PokeReturnValue(is_done=True)
+        except RpcError:
+            return PokeReturnValue(is_done=False)
         except Exception as e:
             raise AirflowException(f"ArmoniK operator error: {e}")
 
@@ -175,9 +176,9 @@ def experiment_dag():
     def environment_fork(params: dict[str, str]) -> None:
         match params["environment"]:
             case "localhost":
-                return run_client_localhost.task_id
+                return "run-client-localhost"
             case "gcp":
-                return run_client_gcp.task_id
+                return "run-client-localhost"
 
     environment_fork = environment_fork()
 
@@ -197,7 +198,7 @@ def experiment_dag():
             logger = logging.getLogger("airflow.task")
             logger.info(f"Waiting for the {n_nodes} nodes to be available...")
             hook = KubernetesHook(conn_id=params["kubernetes_conn_id"])
-            node_names = [node.metadata.name for node in hook.core_v1_client.list_node().items]
+            node_names = [node.metadata.name for node in hook.core_v1_client.list_node().items if "workers" in node.metadata.name]
             if n_nodes == len(node_names):
                 logger.info("All the nodes are available.")
                 return PokeReturnValue(is_done=True, xcom_value=node_names)
@@ -210,27 +211,37 @@ def experiment_dag():
             task_id="run-client-gcp",
             ssh_hook=ComputeEngineSSHHook(
                 user="username",
-                instance_name="{{ params.client_instance_name }}",
-                zone="{{ params.client_instance_location }}",
+                instance_name="airflow-bench-client",
+                zone="us-central1-a",
                 use_oslogin=False,
                 use_iap_tunnel=False,
                 cmd_timeout=1,
-                gcp_conn_id="{{ params.gcp_conn_id }}",
+                gcp_conn_id="google_cloud_default",
             ),
-            command="docker run --rm \\ {% for key, value in ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config').items() %} -e {{ key }}={{ value }} \\ {% endfor %} {{ params.workload }}",
+            command="docker run --rm {% for key, value in ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config').items() %} -e {{ key }}={{ value }} {% endfor %} {{ params.workload }}",
+            conn_timeout=3600,
+            cmd_timeout=3600,
         )
 
         wait_for_cluster_nodes >> run_client
 
+    run_client_gcp = run_client_gcp()
+
     @task(task_id="parse-client-output", trigger_rule="one_success")
     def parse_client_output(ti: TaskInstance, params: dict[str, str]) -> None:
-        logs = ti.xcom_pull(task_ids=f'run-client-{params["environment"]}')
+        # if params["environment"] == "localhost":
+        #     logs = ti.xcom_pull(task_ids=f'run-client-{params["environment"]}')
+        # else:
+        #     logs = ti.xcom_pull(task_ids='run_client_gcp.run-client-gcp')
+        # import base64
+        # logs = base64.b64decode(logs).decode().split("\n")
+        logs = ti.xcom_pull(task_ids='run-client-localhost')
         for log in reversed(logs):
             try:
                 log = json.loads(log)
                 session_id = log["sessionId"]
                 break
-            except json.decoder.JSONDecodeError:
+            except Exception:
                 continue
             except KeyError:
                 continue
