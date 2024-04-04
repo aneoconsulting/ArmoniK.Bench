@@ -6,7 +6,7 @@ from airflow.decorators import dag, task
 from airflow.io.path import ObjectStoragePath
 from airflow.models.param import Param
 
-from notifications.notifier import ArmoniKBenchEmailNotifier
+from notifiers.notifier import ArmoniKBenchEmailNotifier
 from operators.run_experiment import RunExperiment
 
 

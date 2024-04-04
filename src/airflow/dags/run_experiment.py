@@ -30,7 +30,7 @@ from armonik_analytics.metrics import (
 from armonik_analytics.utils import TaskTimestamps
 from grpc import RpcError
 
-from notifications.notifier import ArmoniKBenchEmailNotifier
+from notifiers.notifier import ArmoniKBenchEmailNotifier
 from operators.armonik import ArmoniKDeployClusterOperator, ArmoniKDestroyClusterOperator
 
 
