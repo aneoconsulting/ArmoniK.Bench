@@ -1,4 +1,3 @@
-import logging
 import uuid
 
 from armonik.client import ArmoniKHealthChecks
@@ -27,19 +26,18 @@ def armonik_services_healthy(channel: Channel) -> bool:
     client = ArmoniKHealthChecks(channel)
 
     for name, health in client.check_health().items():
-        if health["status"] == ServiceHealthCheckStatus.HEALTHY:
-            logging.info(f"Service {name} is healthy.")
-        else:
-            logging.info(f"Service {name} is not yet healthy.")
+        if health["status"] != ServiceHealthCheckStatus.HEALTHY:
             return False
         return True
 
 
-def update_workload_config(workload_config: dict[str, str], host: str, port: int | None = None) -> dict[str, str]:
+def update_workload_config(
+    workload_config: dict[str, str], host: str, port: int | None = None
+) -> dict[str, str]:
     """Updates the user-provided workload configuration by adding the url of the cluster control plane on which the workload will run,
     as well as a taint to identify the workload's tasks after execution.
     The taint is simply a uuid added to the task options of the workload.
-    
+
     Parameters
     ----------
     workload_config : dict[str, str]
