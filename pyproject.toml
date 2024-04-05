@@ -15,6 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
+    'apache-airflow[amazon]',
     'apache-airflow[google]',
     'apache-airflow-providers-docker',
     'apache-airflow-providers-github',
@@ -23,6 +24,7 @@ dependencies = [
     'armonik>=3.16.1',
     'armonik_analytics',
     'psycopg2',
+    'PyYAML',
 ]
 
 [project.urls]
@@ -44,7 +46,8 @@ exclude=['tests']
 [project.optional-dependencies]
 dev = [
     'mypy',
-    'ruff'
+    'ruff',
+    "graphviz",
 ]
 tests = [
   'coverage',

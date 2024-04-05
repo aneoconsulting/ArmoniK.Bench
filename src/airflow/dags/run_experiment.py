@@ -1,21 +1,22 @@
 import json
 import logging
 import os
+import uuid
 
 from datetime import datetime
 
 import numpy as np
 
-from airflow.decorators import dag, task
+from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowFailException, AirflowException
 from airflow.io.path import ObjectStoragePath
 from airflow.models.connection import Connection
 from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
-from airflow.providers.docker.operators.docker import DockerOperator
-from airflow.providers.google.cloud.hooks.compute_ssh import ComputeEngineSSHHook
+from airflow.providers.cncf.kubernetes.hooks.kubernetes import KubernetesHook
+from airflow.providers.cncf.kubernetes.operators.job import KubernetesJobOperator
 from airflow.providers.grpc.hooks.grpc import GrpcHook
-from airflow.providers.ssh.operators.ssh import SSHOperator
+from airflow.sensors.base import PokeReturnValue
 from armonik.client import ArmoniKHealthChecks
 from armonik.common import ServiceHealthCheckStatus
 from armonik.client import ArmoniKTasks, TaskFieldFilter
@@ -29,17 +30,36 @@ from armonik_analytics.metrics import (
 from armonik_analytics.utils import TaskTimestamps
 from grpc import RpcError
 
-from operators.armonik import ArmoniKDeployClusterOperator
+from notifiers.notifier import ArmoniKBenchEmailNotifier
+from operators.armonik import ArmoniKDeployClusterOperator, ArmoniKDestroyClusterOperator
 
 
 base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
 
 
 @dag(
-    dag_id="armonik-run-experiment",
+    dag_id="run_experiment",
     description="Workflow for running a given workload from an existing client on a given infrastructure.",
     schedule=None,
+    max_active_runs=1,
     render_template_as_native_obj=True,
+    template_searchpath=os.environ["AIRFLOW_TEMPLATE_SEARCHPATH"],
+    on_success_callback=ArmoniKBenchEmailNotifier(
+        aws_conn_id="aws_default",
+        target_arn=os.environ["AIRFLOW_AWS_SNS_ARN"],
+        message="./notifications/email_dag_success.html",
+        subject="Airflow DAG execution success",
+        region_name=os.environ["AIRFLOW_AWS_SNS_REGION"],
+    ),
+    default_args={
+        "on_failure_callback": ArmoniKBenchEmailNotifier(
+            aws_conn_id="aws_default",
+            target_arn=os.environ["AIRFLOW_AWS_SNS_ARN"],
+            message="./notifications/email_task_failure.html",
+            subject="Airflow Task execution failure",
+            region_name=os.environ["AIRFLOW_AWS_SNS_REGION"],
+        )
+    },
     params={
         "exp_name": Param(
             description="Name of the experiment to be run.",
@@ -66,18 +86,14 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
             description="Workload configuring to be provided as container environment variables.",
             type="object",
         ),
-        "client_instance_name": Param(
-            default="airflow-bench-client",
-            description="GCP client instance name.",
-            type="string",
-        ),
-        "client_instance_zone": Param(
-            description="GCP client instance zone.",
-            type="string",
-        ),
         "armonik_conn_id": Param(
             default="armonik_default",
             description="Reference to an existing or to be created gRPC Connection.",
+            type="string",
+        ),
+        "kubernetes_conn_id": Param(
+            default="kubernetes_default",
+            description="Reference to an existing or to be created Kubernetes Connection.",
             type="string",
         ),
         "github_conn_id": Param(
@@ -97,103 +113,87 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
         ),
     },
 )
-def experiment_dag():
+def run_experiment():
     """Workflow assessing ArmoniK's performance against fault tolerance scenarios for the workload implemented by the ArmoniK HTC Mock client on a fixed infrastructure."""
 
-    update_cluster = ArmoniKDeployClusterOperator(
-        task_id="deploy-cluster",
+    deploy_armonik = ArmoniKDeployClusterOperator(
+        task_id="deploy_armonik",
         release="{{ params.release }}",
         environment="{{ params.environment }}",
         region="{{ params.infra_region }}",
         config="{{ params.infra_config }}",
         armonik_conn_id="{{ params.armonik_conn_id }}",
+        kubernetes_conn_id="{{ params.kubernetes_conn_id }}",
         github_conn_id="{{ params.github_conn_id }}",
         bucket_prefix="{{ params.bucket_prefix }}",
     )
 
-    @task(task_id="check-cluster-health")
-    def check_cluster_health(params: dict[str, str]) -> None:
-        try:
+    @task_group
+    def warm_up():
+        @task.sensor(poke_interval=10, timeout=600, mode="poke")
+        def services_ready(params: dict[str, str]) -> PokeReturnValue:
+            try:
+                logger = logging.getLogger("airflow.task")
+                hook = GrpcHook(grpc_conn_id=params["armonik_conn_id"])
+                with hook.get_conn() as channel:
+                    client = ArmoniKHealthChecks(channel)
+
+                    for name, health in client.check_health().items():
+                        if health["status"] == ServiceHealthCheckStatus.HEALTHY:
+                            logger.info(f"Service {name} is healthy.")
+                        else:
+                            logger.info(f"Service {name} is not yet healthy.")
+                            return PokeReturnValue(is_done=False)
+                        return PokeReturnValue(is_done=True)
+            except RpcError:
+                return PokeReturnValue(is_done=False)
+            except Exception as e:
+                raise AirflowException(f"ArmoniK operator error: {e}")
+
+        services_ready()
+
+        @task.sensor(poke_interval=5, timeout=600, mode="poke")
+        def nodes_ready(params: dict[str, any]):
+            n_nodes = params["infra_config"]["gke"]["node_pools"][0]["node_count"]
             logger = logging.getLogger("airflow.task")
-            hook = GrpcHook(grpc_conn_id=params["armonik_conn_id"])
-            with hook.get_conn() as channel:
-                client = ArmoniKHealthChecks(channel)
+            logger.info(f"Waiting for the {n_nodes} nodes to be available...")
+            hook = KubernetesHook(conn_id=params["kubernetes_conn_id"])
+            node_names = [
+                node.metadata.name
+                for node in hook.core_v1_client.list_node().items
+                if "workers" in node.metadata.name
+            ]
+            if n_nodes == len(node_names):
+                logger.info("All the nodes are available.")
+                return PokeReturnValue(is_done=True, xcom_value=node_names)
+            logger.info(f"{n_nodes - len(node_names)} nodes are still not available.")
+            return PokeReturnValue(is_done=False)
 
-                for name, health in client.check_health().items():
-                    if health["status"] == ServiceHealthCheckStatus.HEALTHY:
-                        logger.info(f"Service {name} is healthy.")
-                    else:
-                        raise AirflowFailException(
-                            f"Service {name} is {health['status']}: {health['message']}."
-                        )
-        except RpcError as rpc_error:
-            raise AirflowFailException(f"Failed to run cluster health checks, error: {rpc_error}")
-        except Exception as e:
-            raise AirflowException(f"ArmoniK operator error: {e}")
+        nodes_ready()
 
-    check_cluster_health = check_cluster_health()
+    warm_up = warm_up()
 
-    @task(task_id="retrive-cluster-connection")
-    def retrieve_cluster_connection(ti: TaskInstance, params: dict[str, str]) -> None:
+    @task
+    def prepare_workload_execution(ti: TaskInstance, params: dict[str, str]) -> None:
         workload_config = {key: value for key, value in params["workload_config"].items()}
         conn = Connection.get_connection_from_secrets(conn_id=params["armonik_conn_id"])
         workload_config["GrpcClient__Endpoint"] = (
             f"http://{conn.host}" if not conn.port else f"http://{conn.host}:{conn.port}"
         )
+        workload_config[f"{workload_config.keys()[0].split('_')[0]}__Options_UUID"] = str(
+            uuid.uuid4()
+        )
         ti.xcom_push(key="workload_config", value=workload_config)
 
-    retrieve_cluster_connection = retrieve_cluster_connection()
+    prepare_workload_execution = prepare_workload_execution()
 
-    @task.branch(task_id="environment-fork")
-    def environment_fork(params: dict[str, str]) -> None:
-        match params["environment"]:
-            case "localhost":
-                return run_client_localhost.task_id
-            case "gcp":
-                return run_client_gcp.task_id
-
-    environment_fork = environment_fork()
-
-    run_client_localhost = DockerOperator(
-        task_id="run-client-localhost",
-        image="{{ params.workload }}",
-        auto_remove="success",
-        xcom_all=True,
-        environment="{{ ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config') }}",
+    run_client = KubernetesJobOperator(
+        task_id="run_client",
+        job_template_file="./kubernetes/run_client.yaml",
     )
 
-    run_client_gcp = SSHOperator(
-        task_id="run-client-gcp",
-        ssh_hook=ComputeEngineSSHHook(
-            user="username",
-            instance_name="{{ params.client_instance_name }}",
-            zone="{{ params.client_instance_location }}",
-            use_oslogin=False,
-            use_iap_tunnel=False,
-            cmd_timeout=1,
-            gcp_conn_id="{{ params.gcp_conn_id }}",
-        ),
-        command="docker run --rm \\ {% for key, value in ti.xcom_pull(task_ids='retrive-cluster-connection', key='workload_config').items() %} -e {{ key }}={{ value }} \\ {% endfor %} {{ params.workload }}",
-    )
-
-    @task(task_id="parse-client-output", trigger_rule="one_success")
-    def parse_client_output(ti: TaskInstance, params: dict[str, str]) -> None:
-        logs = ti.xcom_pull(task_ids=f'run-client-{params["environment"]}')
-        for log in reversed(logs):
-            try:
-                log = json.loads(log)
-                session_id = log["sessionId"]
-                break
-            except json.decoder.JSONDecodeError:
-                continue
-            except KeyError:
-                continue
-        ti.xcom_push(key="session-id", value=session_id)
-
-    parse_client_output = parse_client_output()
-
-    @task(task_id="save-run-results")
-    def save_run_results(ti: TaskInstance, params: dict[str, str]) -> None:
+    @task
+    def commit(ti: TaskInstance, params: dict[str, str]) -> None:
         try:
             logger = logging.getLogger("airflow.task")
             hook = GrpcHook(grpc_conn_id=params["armonik_conn_id"])
@@ -245,17 +245,35 @@ def experiment_dag():
         except Exception as e:
             raise AirflowException(f"ArmoniK operator error: {e}")
 
-    save_run_results = save_run_results()
+    commit = commit()
+
+    @task.short_circuit
+    def skip_destroy():
+        pass
+
+    skip_destroy = skip_destroy()
+
+    destroy_armonik = ArmoniKDestroyClusterOperator(
+        task_id="destroy_armonik",
+        release="{{ ti.xcom_pull(task_ids='load-campaign', key='release') }}",
+        environment="{{ ti.xcom_pull(task_ids='load-campaign', key='environment') }}",
+        region="{{ ti.xcom_pull(task_ids='load-campaign')['experiments'][-1]['infrastructure']['region'] }}",
+        config="{{ ti.xcom_pull(task_ids='load-campaign')['experiments'][-1]['infrastructure']['config'] }}",
+        armonik_conn_id="{{ params.armonik_conn_id }}",
+        github_conn_id="{{ params.github_conn_id }}",
+        bucket_prefix="{{ params.bucket_prefix }}",
+        trigger_rule="one_success",
+    )
 
     (
-        update_cluster
-        >> check_cluster_health
-        >> retrieve_cluster_connection
-        >> environment_fork
-        >> [run_client_gcp, run_client_localhost]
-        >> parse_client_output
-        >> save_run_results
+        deploy_armonik
+        >> warm_up
+        >> prepare_workload_execution
+        >> run_client
+        >> commit
+        >> skip_destroy
+        >> destroy_armonik
     )
 
 
-experiment_dag()
+run_experiment()
