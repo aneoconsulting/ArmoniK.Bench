@@ -53,11 +53,33 @@ def test_armonik_services_healthy(
         assert armonik_services_healthy(channel) == expected_output
 
 
-@pytest.mark.parametrize(("workload_config", "host", "port", "expected_output"), [
-    ({"HtcMock__TotalCalculationTime": "00:00:00.0"}, "172.17.119.85", 5001, {"GrpcClient__Endpoint": "172.17.119.85:5001", "HtcMock__Options_UUID": ""}),
-    ({"HtcMock__TotalCalculationTime": "00:00:00.0"}, "mycluster.com", None, {"GrpcClient__Endpoint": "mycluster.com", "HtcMock__Options_UUID": ""}),
-    ({"BenchOptions__TotalCalculationTime": "00:00:00.0"}, "172.17.119.85", 5001, {"GrpcClient__Endpoint": "172.17.119.85:5001", "BenchOptions__Options_UUID": ""}),
-])
-def test_update_workload_config(mocker, workload_config: dict[str, str], host: str, port: int, expected_output: dict[str, str]) -> None:
+@pytest.mark.parametrize(
+    ("workload_config", "host", "port", "expected_output"),
+    [
+        (
+            {"HtcMock__TotalCalculationTime": "00:00:00.0"},
+            "172.17.119.85",
+            5001,
+            {"GrpcClient__Endpoint": "172.17.119.85:5001", "HtcMock__Options_UUID": ""},
+        ),
+        (
+            {"HtcMock__TotalCalculationTime": "00:00:00.0"},
+            "mycluster.com",
+            None,
+            {"GrpcClient__Endpoint": "mycluster.com", "HtcMock__Options_UUID": ""},
+        ),
+        (
+            {"BenchOptions__TotalCalculationTime": "00:00:00.0"},
+            "172.17.119.85",
+            5001,
+            {"GrpcClient__Endpoint": "172.17.119.85:5001", "BenchOptions__Options_UUID": ""},
+        ),
+    ],
+)
+def test_update_workload_config(
+    mocker, workload_config: dict[str, str], host: str, port: int, expected_output: dict[str, str]
+) -> None:
     mocker.patch.object(uuid, "uuid4", return_value="")
-    assert update_workload_config(workload_config, host, port) == (expected_output | workload_config)
+    assert update_workload_config(workload_config, host, port) == (
+        expected_output | workload_config
+    )

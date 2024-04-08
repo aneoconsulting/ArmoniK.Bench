@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import uuid
 
 from datetime import datetime
 
@@ -14,11 +13,8 @@ from airflow.models.connection import Connection
 from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
 from airflow.providers.cncf.kubernetes.hooks.kubernetes import KubernetesHook
-from airflow.providers.cncf.kubernetes.operators.job import KubernetesJobOperator
 from airflow.providers.grpc.hooks.grpc import GrpcHook
 from airflow.sensors.base import PokeReturnValue
-from armonik.client import ArmoniKHealthChecks
-from armonik.common import ServiceHealthCheckStatus
 from armonik.client import ArmoniKTasks, TaskFieldFilter
 from armonik_analytics import ArmoniKStatistics
 from armonik_analytics.metrics import (
@@ -29,9 +25,16 @@ from armonik_analytics.metrics import (
 )
 from armonik_analytics.utils import TaskTimestamps
 from grpc import RpcError
+from kubernetes.client import models as k8s
+from armonik_bench.common import (
+    armonik_services_healthy,
+    kubernetes_n_nodes_ready,
+    update_workload_config,
+)
 
 from notifiers.notifier import ArmoniKBenchEmailNotifier
 from operators.armonik import ArmoniKDeployClusterOperator, ArmoniKDestroyClusterOperator
+from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
 
 
 base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
@@ -86,6 +89,11 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
             description="Workload configuring to be provided as container environment variables.",
             type="object",
         ),
+        "destroy": Param(
+            default=False,
+            description="Weither to destroy the cluster at the end of the experiment",
+            type="boolean",
+        ),
         "armonik_conn_id": Param(
             default="armonik_default",
             description="Reference to an existing or to be created gRPC Connection.",
@@ -133,40 +141,26 @@ def run_experiment():
         @task.sensor(poke_interval=10, timeout=600, mode="poke")
         def services_ready(params: dict[str, str]) -> PokeReturnValue:
             try:
-                logger = logging.getLogger("airflow.task")
-                hook = GrpcHook(grpc_conn_id=params["armonik_conn_id"])
-                with hook.get_conn() as channel:
-                    client = ArmoniKHealthChecks(channel)
-
-                    for name, health in client.check_health().items():
-                        if health["status"] == ServiceHealthCheckStatus.HEALTHY:
-                            logger.info(f"Service {name} is healthy.")
-                        else:
-                            logger.info(f"Service {name} is not yet healthy.")
-                            return PokeReturnValue(is_done=False)
+                with GrpcHook(grpc_conn_id=params["armonik_conn_id"]).get_conn() as channel:
+                    if armonik_services_healthy(channel=channel):
                         return PokeReturnValue(is_done=True)
+                    return PokeReturnValue(is_done=False)
             except RpcError:
                 return PokeReturnValue(is_done=False)
-            except Exception as e:
-                raise AirflowException(f"ArmoniK operator error: {e}")
 
         services_ready()
 
         @task.sensor(poke_interval=5, timeout=600, mode="poke")
         def nodes_ready(params: dict[str, any]):
-            n_nodes = params["infra_config"]["gke"]["node_pools"][0]["node_count"]
             logger = logging.getLogger("airflow.task")
-            logger.info(f"Waiting for the {n_nodes} nodes to be available...")
-            hook = KubernetesHook(conn_id=params["kubernetes_conn_id"])
-            node_names = [
-                node.metadata.name
-                for node in hook.core_v1_client.list_node().items
-                if "workers" in node.metadata.name
-            ]
-            if n_nodes == len(node_names):
-                logger.info("All the nodes are available.")
-                return PokeReturnValue(is_done=True, xcom_value=node_names)
-            logger.info(f"{n_nodes - len(node_names)} nodes are still not available.")
+            if kubernetes_n_nodes_ready(
+                KubernetesHook(conn_id=params["kubernetes_conn_id"]).core_v1_client,
+                params["infra_config"]["gke"]["node_pools"][0]["node_count"],
+                ".*worker.*",
+            ):
+                logger.info("All nodes of the cluster are available.")
+                return PokeReturnValue(is_done=True)
+            logger.info("Not all nodes of the cluster are available.")
             return PokeReturnValue(is_done=False)
 
         nodes_ready()
@@ -175,21 +169,29 @@ def run_experiment():
 
     @task
     def prepare_workload_execution(ti: TaskInstance, params: dict[str, str]) -> None:
-        workload_config = {key: value for key, value in params["workload_config"].items()}
         conn = Connection.get_connection_from_secrets(conn_id=params["armonik_conn_id"])
-        workload_config["GrpcClient__Endpoint"] = (
-            f"http://{conn.host}" if not conn.port else f"http://{conn.host}:{conn.port}"
+        ti.xcom_push(
+            key="workload_config",
+            value=update_workload_config(params["workload_config"], conn.host, conn.port),
         )
-        workload_config[f"{workload_config.keys()[0].split('_')[0]}__Options_UUID"] = str(
-            uuid.uuid4()
-        )
-        ti.xcom_push(key="workload_config", value=workload_config)
 
     prepare_workload_execution = prepare_workload_execution()
 
-    run_client = KubernetesJobOperator(
+    run_client = ExtraTemplatedKubernetesJobOperator(
         task_id="run_client",
-        job_template_file="./kubernetes/run_client.yaml",
+        name="run-client",
+        namespace="armonik",
+        labels={"app": "armonik", "service": "run-client", "type": "others"},
+        image="{{ params.workload }}",
+        env_vars="{{ ti.xcom_pull(task_ids='prepare_workload_execution', key='workload_config') }}",
+        node_selector={"service": "others"},
+        tolerations=[k8s.V1Toleration(effect="NO_SCHEDULE", key="service", value="others")],
+        backoff_limit=1,
+        completion_mode="NonIndexed",
+        completions=1,
+        parallelism=1,
+        on_finish_action="delete_pod",
+        get_logs=True,
     )
 
     @task
@@ -247,9 +249,11 @@ def run_experiment():
 
     commit = commit()
 
-    @task.short_circuit
-    def skip_destroy():
-        pass
+    @task.short_circuit(trigger_rule="all_done")
+    def skip_destroy(params: dict[str, str]) -> bool:
+        if params["destroy"]:
+            return True
+        return False
 
     skip_destroy = skip_destroy()
 

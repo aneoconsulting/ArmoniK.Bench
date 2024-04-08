@@ -6,9 +6,8 @@ from airflow.decorators import dag, task
 from airflow.io.path import ObjectStoragePath
 from airflow.models.param import Param
 
-from notifiers.notifier import ArmoniKBenchEmailNotifier
 from operators.run_experiment import RunExperiment
-
+from notifiers.notifier import ArmoniKBenchEmailNotifier
 
 base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
 
