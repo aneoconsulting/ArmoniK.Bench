@@ -29,11 +29,62 @@ from armonik_bench.common import (
     armonik_services_healthy,
     kubernetes_n_nodes_ready,
     update_workload_config,
+    clone_repo,
+    edit_default_parameters_file
 )
 
 from notifiers.notifier import ArmoniKBenchEmailNotifier
-from operators.armonik import ArmoniKDeployClusterOperator, ArmoniKDestroyClusterOperator
 from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
+from operators.connection import CreateOrUpdateConnectionOperator, DeleteConnectionOperator
+
+
+import json
+import os
+import shutil
+import yaml
+
+from pathlib import Path
+
+from airflow.decorators import task, task_group
+from airflow.exceptions import AirflowFailException
+from airflow.models.taskinstance import TaskInstance
+from airflow.operators.bash import BashOperator
+from git import exc
+
+
+repo_path = Path(os.environ.get("AIRFLOW_DATA", os.getcwd()))
+workdir_path = repo_path.parent / ".workdir"
+
+
+bash_options = {
+    "cwd": str(repo_path / "infrastructure/quick-deploy/{{ params.environment }}"),
+    "append_env": True,
+    "env": {
+        "GENERATED_DIR": str(workdir_path),
+        "PARAMETERS_FILE": "parameters.tfvars.json",
+        "PREFIX": "{{ params.bucket_prefix }}",
+        "REGION": "{{ params.region }}",
+    },
+}
+
+
+def init_fct(params: dict[str, str]) -> None:
+    try:
+        clone_repo(repo_path=repo_path, repo_url=params["repo_url"], ref=params["release"])
+        edit_default_parameters_file(
+            repo_path=repo_path, environment=params["environment"], config=params["infra_config"]
+        )
+    except exc.GitCommandError as error:
+        raise AirflowFailException(
+            f"An error occured when cloning or checking out the repositor: {error}"
+        )
+    except TypeError as error:
+        raise AirflowFailException(f"Invalid infrastructure configuration format: {error}")
+
+
+def teardown_fct() -> None:
+    if workdir_path.exists() and workdir_path.is_dir():
+        shutil.rmtree(workdir_path)
 
 
 from pathlib import Path
@@ -111,11 +162,6 @@ base = Path("/home/airflow/gcs/data")
             description="Reference to an existing or to be created Kubernetes Connection.",
             type="string",
         ),
-        "github_conn_id": Param(
-            default="github_default",
-            description="Reference to a pre-defined GitHub Connection.",
-            type="string",
-        ),
         "bucket_prefix": Param(
             default="airflow-bench",
             description="Prefix of the S3/GCS bucket that will store the Terraform state file.",
@@ -131,17 +177,104 @@ base = Path("/home/airflow/gcs/data")
 def run_experiment():
     """Workflow assessing ArmoniK's performance against fault tolerance scenarios for the workload implemented by the ArmoniK HTC Mock client on a fixed infrastructure."""
 
-    deploy_armonik = ArmoniKDeployClusterOperator(
-        task_id="deploy_armonik",
-        release="{{ params.release }}",
-        environment="{{ params.environment }}",
-        region="{{ params.infra_region }}",
-        config="{{ params.infra_config }}",
-        armonik_conn_id="{{ params.armonik_conn_id }}",
-        kubernetes_conn_id="{{ params.kubernetes_conn_id }}",
-        github_conn_id="{{ params.github_conn_id }}",
-        bucket_prefix="{{ params.bucket_prefix }}",
-    )
+    @task_group
+    def deploy_armonik_cluster() -> None:
+        @task
+        def init(params: dict[str, str]) -> None:
+            init_fct(params)
+
+        init = init()
+
+        get_modules = BashOperator(task_id="get_modules", bash_command="make get-modules", **bash_options)
+
+        terraform_init = BashOperator(task_id="terraform_init", bash_command="make init", **bash_options)
+
+        terraform_apply = BashOperator(
+            task_id="terraform_apply", bash_command="make apply", **bash_options
+        )
+
+        @task(trigger_rule="one_success")
+        def output(ti: TaskInstance) -> None:
+            try:
+                with (workdir_path / "armonik-output.json").open() as file:
+                    ti.xcom_push(key="outputs", value=json.loads(file.read()))
+                with (workdir_path / "kubeconfig").open() as file:
+                    ti.xcom_push(key="kubeconfig", value=yaml.safe_load(file.read()))
+            except FileNotFoundError as error:
+                raise AirflowFailException(f"Can't read deployment outputs: {error}")
+
+        output = output()
+
+        create_armonik_connection = CreateOrUpdateConnectionOperator(
+            task_id="create_armonik_connection",
+            conn_id="{{ params.armonik_conn_id }}",
+            conn_type="grpc",
+            description="Connection to ArmoniK control plane.",
+            host=" {{ ti.xcom_pull(task_ids='deploy_armonik_cluster.output', key='outputs')['armonik']['control_plane_url'].removeprefix('http'://').split(':')[0] }} ",
+            port=" {{ ti.xcom_pull(task_ids='deploy_armonik_cluster.output', key='outputs')['armonik']['control_plane_url'].removeprefix('http'://').split(':')[1] }} ",
+            extra=json.dumps({"auth_type": "NO_AUTH"}),
+        )
+
+        create_kubernetes_connection = CreateOrUpdateConnectionOperator(
+            task_id="create_kubernetes_connection",
+            conn_id="{{ params.kubernetes_conn_id }}",
+            conn_type="kubernetes",
+            description="Kubernetes connection for a remote ArmoniK cluster.",
+            extra=json.dumps(
+                {
+                    "in_cluster": False,
+                    "kube_config": "{{ json.dumps(ti.xcom_pull(task_ids='deploy_armonik_cluster.output', key='kubeconfig')) }}",
+                }
+            ),
+        )
+
+        @task
+        def teardown() -> None:
+            teardown_fct()
+
+        teardown = teardown()
+
+        (
+            init
+            >> get_modules
+            >> terraform_init
+            >> terraform_apply
+            >> output
+            >> [create_armonik_connection, create_kubernetes_connection]
+            >> teardown
+        )
+
+
+    @task_group
+    def destroy_armonik_cluster() -> None:
+        @task
+        def init(params: dict[str, str]) -> None:
+            init_fct(params)
+
+        init = init()
+
+        get_modules = BashOperator(task_id="get_modules", bash_command="make get-modules", **bash_options)
+
+        terraform_init = BashOperator(task_id="terraform_init", bash_command="make init", **bash_options)
+
+        terraform_destroy = BashOperator(
+            task_id="terraform_destroy", bash_command="make delete", **bash_options
+        )
+
+        delete_connections = DeleteConnectionOperator(
+            task_id="delete_connections",
+            conn_ids=["{{ params.armonik_conn_id }}", "{{ params.kubernetes_conn_id }}"],
+        )
+
+        @task
+        def teardown():
+            teardown_fct()
+
+        teardown = teardown()
+
+        init >> get_modules >> terraform_init >> terraform_destroy >> delete_connections >> teardown
+
+    deploy_armonik = deploy_armonik_cluster()
 
     @task_group
     def warm_up():
@@ -266,17 +399,7 @@ def run_experiment():
 
     skip_destroy = skip_destroy()
 
-    destroy_armonik = ArmoniKDestroyClusterOperator(
-        task_id="destroy_armonik",
-        release="{{ ti.xcom_pull(task_ids='load-campaign', key='release') }}",
-        environment="{{ ti.xcom_pull(task_ids='load-campaign', key='environment') }}",
-        region="{{ ti.xcom_pull(task_ids='load-campaign')['experiments'][-1]['infrastructure']['region'] }}",
-        config="{{ ti.xcom_pull(task_ids='load-campaign')['experiments'][-1]['infrastructure']['config'] }}",
-        armonik_conn_id="{{ params.armonik_conn_id }}",
-        github_conn_id="{{ params.github_conn_id }}",
-        bucket_prefix="{{ params.bucket_prefix }}",
-        trigger_rule="one_success",
-    )
+    destroy_armonik = destroy_armonik_cluster()
 
     (
         deploy_armonik
