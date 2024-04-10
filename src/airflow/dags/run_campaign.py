@@ -1,21 +1,24 @@
 import json
 import os
+
+from datetime import datetime, timezone
 from hashlib import sha256
 
 from airflow.decorators import dag, task
-from airflow.io.path import ObjectStoragePath
 from airflow.models.param import Param
 
 from operators.run_experiment import RunExperiment
 from notifiers.notifier import ArmoniKBenchEmailNotifier
 
-base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
+from pathlib import Path
+base = Path("/home/airflow/gcs/data")
 
 
 @dag(
     dag_id="run_campaign",
     description="Workflow for running a given workload from an existing client on a given infrastructure.",
     schedule=None,
+    start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
     max_active_runs=1,
     render_template_as_native_obj=True,
     template_searchpath=os.environ["AIRFLOW_TEMPLATE_SEARCHPATH"],
@@ -46,11 +49,6 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
             description="Reference to an existing or to be created Kubernetes Connection.",
             type="string",
         ),
-        "github_conn_id": Param(
-            default="github_default",
-            description="Reference to a pre-defined GitHub Connection.",
-            type="string",
-        ),
         "gcp_conn_id": Param(
             default="google_cloud_default",
             description="Airflow connection to Google Cloud Platform.",
@@ -62,6 +60,7 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
             type="string",
         ),
         "campaign": Param(
+            default="",
             description="Reference to the campaign to run (its hash).",
             type="string",
         ),
@@ -70,33 +69,34 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
 def run_campaign():
     """Workflow assessing ArmoniK's performance against fault tolerance scenarios for the workload implemented by the ArmoniK HTC Mock client on a fixed infrastructure."""
 
-    @task(task_id="load-campaign", multiple_outputs=True)
-    def load_campaign(params: dict[str, str]) -> None:
-        with (base / f"campaigns/{params['campaign']}").open() as file:
-            campaign_data = json.loads(file.read())
+    @task(multiple_outputs=True)
+    def load_campaign(params: dict[str, str] | None = None) -> None:
+        if params["campaign"]:
+            with (base / f"campaigns/{params['campaign']}").open() as file:
+                campaign_data = json.loads(file.read())
 
-        experiments = []
+            experiments = []
 
-        for experiment in campaign_data["experiments"]:
-            with (base / f"workloads/{experiment['workload']}").open() as file:
-                workload = json.loads(file.read())
-            with (base / f"infrastructures/{experiment['infrastructure']}").open() as file:
-                infrastructure = json.loads(file.read())
-            experiments.append(
-                {
-                    "name": sha256(json.dumps(experiment).encode("utf-8")).hexdigest(),
-                    "workload": workload,
-                    "infrastructure": infrastructure,
-                }
-            )
+            for experiment in campaign_data["experiments"]:
+                with (base / f"workloads/{experiment['workload']}").open() as file:
+                    workload = json.loads(file.read())
+                with (base / f"infrastructures/{experiment['infrastructure']}").open() as file:
+                    infrastructure = json.loads(file.read())
+                experiments.append(
+                    {
+                        "name": sha256(json.dumps(experiment).encode("utf-8")).hexdigest(),
+                        "workload": workload,
+                        "infrastructure": infrastructure,
+                    }
+                )
 
-        campaign_data["experiments"] = experiments
-        return campaign_data
+            campaign_data["experiments"] = experiments
+            return campaign_data
 
     load_campaign = load_campaign()
 
     run_experiments = RunExperiment(
-        task_id="run-experiments",
+        task_id="run_experiments",
         campaign_data="{{ ti.xcom_pull(task_ids='load-campaign')}}",
         stop_on_failure=True,
         allowed_failures=0,
