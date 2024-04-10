@@ -7,9 +7,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  AIRFLOW_OBJECT_STORAGE_PATH: ~/data
-
 jobs:
   lint-format:
     name: Check linting and formatting
@@ -48,8 +45,8 @@ jobs:
             exit 1
           fi
 
-  build-test:
-    name: Build and test Python
+  build-test-armonik-bench:
+    name: Build and test armonik_bench
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
@@ -66,7 +63,7 @@ jobs:
         run: python -m pip install .[tests]
 
       - name: Run tests
-        run: python -m pytest tests --cov=armonik_bench --cov-config=.coveragerc --cov-report=term-missing --cov-report xml:coverage.xml --cov-report html:coverage_report
+        run: python -m pytest tests/armonik_bench --cov=armonik_bench --cov-config=.coveragerc --cov-report=term-missing --cov-report xml:coverage.xml --cov-report html:coverage_report
 
       - name: Get Cover
         uses: orgoro/coverage@6d7a2607343d2abeab89ef40b54ec9785134e313
@@ -84,4 +81,65 @@ jobs:
         uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3
         with:
           name: code-coverage-report-xml
+          path: coverage.xml
+
+  build-test-airflow:
+    name: Build and test Airflow
+    runs-on: ubuntu-latest
+    needs: build-test-armonik-bench
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
+        with:
+          fetch-depth: 0
+
+      - name: pip update
+        run: python -m pip install --upgrade pip
+
+      - name: Set-up docker
+        uses: docker-practice/actions-setup-docker@master
+        timeout-minutes: 12
+
+      - name: GCP auth
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GOOGLE_CLOUD_CREDENTIALS }}'
+  
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          version: '>= 469.0.0'
+
+      - name: Set-up composer local environment
+        run: bash setup-local-env.sh
+
+      - name: Start composer local environment
+        run: composer-dev restart armonik-bench
+
+      - name: Install test dependencies
+        run: docker exec composer-local-dev-armonik-bench pip install -r /home/airflow/gcs/data/requirements-tests.txt
+
+      - name: Run tests
+        run: docker exec composer-local-dev-armonik-bench python -m pytest /home/airflow/gcs/data/tests --cov=/home/airflow/gcs/dags --cov-config=.coveragerc --cov-report=term-missing --cov-report xml:coverage.xml --cov-report html:coverage_report
+
+      - name: Retrieve coverage reports
+        run: |
+          docker cp composer-local-dev-armonik-bench:/home/airflow/coverage.xml coverage.xml
+          docker cp composer-local-dev-armonik-bench:/home/airflow/coverage_report coverage_report
+
+      - name: Get Cover
+        uses: orgoro/coverage@6d7a2607343d2abeab89ef40b54ec9785134e313
+        with:
+          coverageFile: ./composer/armonik-bench/data/tests/coverage.xml
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Archive code coverage results html
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3
+        with:
+          name: ./composer/armonik-bench/data/tests/code-coverage-report-html
+          path: coverage_report
+
+      - name: Archive code coverage results xml
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3
+        with:
+          name: ./composer/armonik-bench/data/tests/code-coverage-report-xml
           path: coverage.xml
