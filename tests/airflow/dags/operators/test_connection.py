@@ -3,7 +3,7 @@ from airflow.utils.session import NEW_SESSION, provide_session
 from sqlalchemy import select
 from sqlalchemy.orm.session import Session
 
-from src.airflow.dags.operators.connection import (
+from operators.connection import (
     CreateOrUpdateConnectionOperator,
     DeleteConnectionOperator,
 )

@@ -37,6 +37,7 @@ from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
 
 
 from pathlib import Path
+
 base = Path("/home/airflow/gcs/data")
 
 
@@ -80,10 +81,11 @@ base = Path("/home/airflow/gcs/data")
             enum=["localhost", "aws", "gcp"],
         ),
         "infra_config": Param(
-            default={},
-            description="Infrastructure configuration in JSON format", type="object"
+            default={}, description="Infrastructure configuration in JSON format", type="object"
         ),
-        "infra_region": Param(default="us-central1", description="Region of infrastructure deployment", type="string"),
+        "infra_region": Param(
+            default="us-central1", description="Region of infrastructure deployment", type="string"
+        ),
         "workload": Param(
             default="",
             description="Docker image of the workload to run with the proper tag.",
@@ -173,7 +175,9 @@ def run_experiment():
     warm_up = warm_up()
 
     @task
-    def prepare_workload_execution(ti: TaskInstance | None = None, params: dict[str, str] | None = None) -> None:
+    def prepare_workload_execution(
+        ti: TaskInstance | None = None, params: dict[str, str] | None = None
+    ) -> None:
         conn = Connection.get_connection_from_secrets(conn_id=params["armonik_conn_id"])
         ti.xcom_push(
             key="workload_config",
