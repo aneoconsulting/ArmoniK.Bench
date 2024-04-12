@@ -2,13 +2,12 @@ import json
 import logging
 import os
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 
 from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowFailException, AirflowException
-from airflow.io.path import ObjectStoragePath
 from airflow.models.connection import Connection
 from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
@@ -37,13 +36,16 @@ from operators.armonik import ArmoniKDeployClusterOperator, ArmoniKDestroyCluste
 from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
 
 
-base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
+from pathlib import Path
+
+base = Path("/home/airflow/gcs/data")
 
 
 @dag(
     dag_id="run_experiment",
     description="Workflow for running a given workload from an existing client on a given infrastructure.",
     schedule=None,
+    start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
     max_active_runs=1,
     render_template_as_native_obj=True,
     template_searchpath=os.environ["AIRFLOW_TEMPLATE_SEARCHPATH"],
@@ -65,6 +67,7 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
     },
     params={
         "exp_name": Param(
+            default="",
             description="Name of the experiment to be run.",
             type="string",
         ),
@@ -72,15 +75,19 @@ base = ObjectStoragePath(os.environ["AIRFLOW_OBJECT_STORAGE_PATH"])
             default="latest", description="ArmoniK release to be deployed.", type="string"
         ),
         "environment": Param(
+            default="localhost",
             description="The environment in which to deploy the ArmoniK cluster.",
             type="string",
             enum=["localhost", "aws", "gcp"],
         ),
         "infra_config": Param(
-            description="Infrastructure configuration in JSON format", type="object"
+            default={}, description="Infrastructure configuration in JSON format", type="object"
         ),
-        "infra_region": Param(description="Region of infrastructure deployment", type="string"),
+        "infra_region": Param(
+            default="us-central1", description="Region of infrastructure deployment", type="string"
+        ),
         "workload": Param(
+            default="",
             description="Docker image of the workload to run with the proper tag.",
             type="string",
         ),
@@ -168,7 +175,9 @@ def run_experiment():
     warm_up = warm_up()
 
     @task
-    def prepare_workload_execution(ti: TaskInstance, params: dict[str, str]) -> None:
+    def prepare_workload_execution(
+        ti: TaskInstance | None = None, params: dict[str, str] | None = None
+    ) -> None:
         conn = Connection.get_connection_from_secrets(conn_id=params["armonik_conn_id"])
         ti.xcom_push(
             key="workload_config",
@@ -195,7 +204,7 @@ def run_experiment():
     )
 
     @task
-    def commit(ti: TaskInstance, params: dict[str, str]) -> None:
+    def commit(ti: TaskInstance | None = None, params: dict[str, str] | None = None) -> None:
         try:
             logger = logging.getLogger("airflow.task")
             hook = GrpcHook(grpc_conn_id=params["armonik_conn_id"])
@@ -250,7 +259,7 @@ def run_experiment():
     commit = commit()
 
     @task.short_circuit(trigger_rule="all_done")
-    def skip_destroy(params: dict[str, str]) -> bool:
+    def skip_destroy(params: dict[str, str] | None = None) -> bool:
         if params["destroy"]:
             return True
         return False

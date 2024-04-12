@@ -10,7 +10,6 @@ from airflow.models.dagbag import DagBag
 from airflow.models.dagrun import DagRun
 from airflow.models.taskinstance import TaskInstance
 from airflow.providers.cncf.kubernetes.hooks.kubernetes import KubernetesHook
-from airflow.utils.file import get_unique_dag_module_name
 from kubernetes.client import CoreV1Api
 
 from .conftest import (
@@ -28,7 +27,20 @@ def dag_id() -> str:
 
 @pytest.fixture
 def dag_namespace(dag: DAG) -> str:
-    return get_unique_dag_module_name(dag.fileloc)
+    try:
+        from airflow.utils.file import get_unique_dag_module_name
+
+        mod_name = get_unique_dag_module_name(dag.fileloc)
+    except ImportError:
+        import pathlib
+        import hashlib
+
+        filepath = dag.fileloc
+        path_hash = hashlib.sha1(filepath.encode("utf-8")).hexdigest()
+        org_mod_name = pathlib.Path(filepath).stem
+        mod_name = f"unusual_prefix_{path_hash}_{org_mod_name}"
+
+    return mod_name
 
 
 @pytest.fixture
@@ -133,6 +145,9 @@ def test_task_warm_up_services_ready(mocker, dag: DAG, dagrun: DagRun, dag_names
             returns=[False, grpc.RpcError(), False, True]
         )
 
+        mocker.patch(
+            f"{dag_namespace}.Connection.get_connection_from_secrets", return_value=Connection()
+        )
         mocker.patch(f"{dag_namespace}.GrpcHook.get_conn", return_value=channel)
         mocker.patch(f"{dag_namespace}.armonik_services_healthy", new=mock_armonik_services_healthy)
         assert_task_run_success(ti)
@@ -153,6 +168,7 @@ def test_task_warm_up_nodes_ready(mocker, dag: DAG, dagrun: DagRun, dag_namespac
 
     mock_kubernetes_n_nodes_ready = MockSensorFunc(returns=[False, False, True])
 
+    mocker.patch("kubernetes.config.load_incluster_config")
     mocker.patch(f"{dag_namespace}.KubernetesHook.core_v1_client", return_value=CoreV1Api())
     mocker.patch(f"{dag_namespace}.kubernetes_n_nodes_ready", new=mock_kubernetes_n_nodes_ready)
     assert_task_run_success_and_xcoms(mocker, ti, pushes=0)
@@ -200,6 +216,7 @@ def test_task_run_client(mocker, dag: DAG, dagrun: DagRun, dag_conf: dict[str, s
         "GrpcClient__Options_UUID": "",
     } | dag_conf["workload_config"]
 
+    mocker.patch("kubernetes.config.load_incluster_config")
     mocker.patch.object(KubernetesHook, "create_job", return_value=None)
     mocker.patch.object(TaskInstance, "xcom_pull", return_value=pull_value)
     assert_task_run_success_and_xcoms(

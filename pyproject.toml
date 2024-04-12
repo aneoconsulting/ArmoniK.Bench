@@ -15,12 +15,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
+    'apache-airflow==2.7.3',
     'apache-airflow[amazon]',
     'apache-airflow[google]',
-    'apache-airflow-providers-docker',
-    'apache-airflow-providers-github',
+    'apache-airflow-providers-cncf-kubernetes',
     'apache-airflow-providers-grpc',
-    'apache-airflow-providers-ssh',
     'armonik>=3.16.1',
     'armonik_analytics',
     'psycopg2',

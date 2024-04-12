@@ -1,4 +1,5 @@
 import datetime
+import re
 
 import pytest
 
@@ -19,7 +20,7 @@ def dagbag() -> DagBag:
 
 @pytest.fixture
 def id_pattern() -> str:
-    return r"^(?:[a-z]{3,}(?:[._][a-z]{2,})*)$"
+    return re.compile(r"^(?:[a-z]{3,}(?:[._][a-z]{2,})*)$")
 
 
 def assert_dag_dict_equal(source: dict[str, list[str]], dag: DAG) -> None:
