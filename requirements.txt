@@ -2,6 +2,7 @@ apache-airflow==2.7.3
 apache-airflow[amazon]
 apache-airflow[google]
 apache-airflow-providers-cncf-kubernetes
+apache-airflow-providers-github
 apache-airflow-providers-grpc
 armonik>=3.16.1
 armonik_analytics
