@@ -129,17 +129,17 @@ jobs:
       - name: Get Cover
         uses: orgoro/coverage@6d7a2607343d2abeab89ef40b54ec9785134e313
         with:
-          coverageFile: ./composer/armonik-bench/data/tests/coverage.xml
+          coverageFile: coverage.xml
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Archive code coverage results html
         uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3
         with:
-          name: ./composer/armonik-bench/data/tests/code-coverage-report-html
+          name: code-coverage-report-html
           path: coverage_report
 
       - name: Archive code coverage results xml
         uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3
         with:
-          name: ./composer/armonik-bench/data/tests/code-coverage-report-xml
+          name: code-coverage-report-xml
           path: coverage.xml
