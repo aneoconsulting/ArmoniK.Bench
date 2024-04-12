@@ -26,7 +26,12 @@ repository = "https://github.com/aneoconsulting/Armonik.Bench"
 
 [tool.setuptools]
 include-package-data = true
-dynamic = {version = {attr = "armonik_bench.__version__"}}
+
+[tool.setuptools.dynamic]
+version = {attr = "armonik_bench.__version__"}
+dependencies = { file = ["requirements.in"] }
+optional-dependencies.tests = { file = ["requirements-tests.txt"] }
+optional-dependencies.airflow = { file = ["requirements-airflow.txt"] }
 
 [tool.setuptools.packages.find]
 where= ["src"]
@@ -39,13 +44,20 @@ exclude=['tests']
 dev = [
     'mypy',
     'ruff',
-    "graphviz",
+    'graphviz',
 ]
 tests = [
-  'coverage',
-  'kubernetes',
-  'pytest',
-  'pytest-cov',
-  'pytest-benchmark[histogram]',
-  'pytest-mock',
+    'coverage',
+    'kubernetes',
+    'pytest',
+    'pytest-cov',
+    'pytest-benchmark[histogram]',
+    'pytest-mock',
+]
+airflow = [
+    'apache-airflow[amazon,google]==2.7.3',
+    'apache-airflow-providers-cncf-kubernetes',
+    'apache-airflow-providers-github',
+    'apache-airflow-providers-grpc',
+    'armonik_analytics',
 ]

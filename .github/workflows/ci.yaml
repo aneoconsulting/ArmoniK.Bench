@@ -93,7 +93,7 @@ jobs:
           fetch-depth: 0
 
       - name: pip update
-        run: python -m pip install --upgrade pip
+        run: python -m pip install --upgrade pip toml
 
       - name: Set-up docker
         uses: docker-practice/actions-setup-docker@master
@@ -114,9 +114,6 @@ jobs:
 
       - name: Start composer local environment
         run: composer-dev restart armonik-bench
-
-      - name: Install test dependencies
-        run: docker exec composer-local-dev-armonik-bench pip install -r /home/airflow/gcs/data/requirements-tests.txt
 
       - name: Run tests
         run: docker exec composer-local-dev-armonik-bench python -m pytest /home/airflow/gcs/data/tests --cov=/home/airflow/gcs/dags --cov-config=.coveragerc --cov-report=term-missing --cov-report xml:coverage.xml --cov-report html:coverage_report

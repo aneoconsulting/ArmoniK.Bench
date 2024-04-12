@@ -38,14 +38,17 @@ setup_dev_composer() {
         --location us-central1 \
         --project project_id || error "Failed to create composer-dev environment."
 
-    mkdir -p composer/$LOCAL_ENV_NAME/data/tests
-    #ln -s tests/airflow composer/$LOCAL_ENV_NAME/data/tests
-    #sudo mount --bind composer/$LOCAL_ENV_NAME/data/tests tests/airflow || error "Failed to mount tests."
+    log "Generate requirements.txt file"
+    python gen_requirements.py --sections airflow,tests
+    echo "armonik_bench @ git+$(git config --get remote.origin.url)@$(git rev-parse HEAD)" >> requirements.txt
 
+    log "Copying 'requirements.txt' and 'variables.env' into composer environment"
     cp requirements.txt composer/$LOCAL_ENV_NAME/requirements.txt
     cp variables.env composer/$LOCAL_ENV_NAME/variables.env
+
+    log "Copying tests into composer environment"
+    mkdir -p composer/$LOCAL_ENV_NAME/data/tests
     cp -r tests/airflow composer/armonik-bench/data/tests
-    cp requirements-tests.txt composer/armonik-bench/data
 }
 
 goodbye() {
