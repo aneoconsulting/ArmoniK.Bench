@@ -12,7 +12,7 @@ from notifiers.notifier import ArmoniKBenchEmailNotifier
 
 from pathlib import Path
 
-base = Path("/home/airflow/gcs/data")
+base = Path("/home/qdelamea/airflow_bench_data")
 
 
 @dag(
@@ -98,7 +98,7 @@ def run_campaign():
 
     run_experiments = RunExperiment(
         task_id="run_experiments",
-        campaign_data="{{ ti.xcom_pull(task_ids='load-campaign')}}",
+        campaign_data="{{ ti.xcom_pull(task_ids='load_campaign')}}",
         stop_on_failure=True,
         allowed_failures=0,
         poke_interval=10,

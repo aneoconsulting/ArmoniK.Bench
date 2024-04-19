@@ -50,7 +50,6 @@ class RunExperiment(TriggerDagRunOperator):
                     "client_instance_zone": self.campaign_data["client"]["instance_zone"],
                     "armonik_conn_id": context["params"]["armonik_conn_id"],
                     "kubernetes_conn_id": context["params"]["kubernetes_conn_id"],
-                    "github_conn_id": context["params"]["github_conn_id"],
                     "bucket_prefix": context["params"]["bucket_prefix"],
                     "gcp_conn_id": context["params"]["gcp_conn_id"],
                 }

@@ -142,7 +142,7 @@ def setup_terraform_environment(
         "EXTRA_PARAMETERS_FILE": "../../../extra.tfvars.json",
         "VERSIONS_FILE": "../../../versions.tfvars.json",
         "MODULES_DIR": f"{generated_dir_path}/infra-modules",
-        "KUBE_CONFIG_PATH": "$(HOME)/.kube/config",
+        "KUBE_CONFIG_PATH": "/home/qdelamea/.kube/config",
         "TF_DATA_DIR": str(generated_dir_path),
         "TF_VAR_namespace": "armonik",
         "TF_VAR_prefix": prefix,
@@ -150,4 +150,5 @@ def setup_terraform_environment(
         "MODULES_SOURCE": modules_source,
         "MODULES_VERSION": modules_version,
         "PREFIX": prefix,
+        "OUTPUT_DIR": f"{generated_dir_path}/armonik-outputs.json",
     }
