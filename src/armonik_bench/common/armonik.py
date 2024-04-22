@@ -56,7 +56,6 @@ def update_workload_config(
     workload_config["GrpcClient__Endpoint"] = (
         f"http://{host}" if not port else f"http://{host}:{port}"
     )
-    workload_config[f"{[*workload_config.keys()][0].split('_')[0]}__Options_UUID"] = str(
-        uuid.uuid4()
-    )
-    return {key: json.dumps(value) if not isinstance(value, str) else value for key, value in workload_config.items()}
+    id = str(uuid.uuid4())
+    workload_config[f"{[*workload_config.keys()][0].split('_')[0]}__Options_UUID"] = id
+    return {key: json.dumps(value) if not isinstance(value, str) else value for key, value in workload_config.items()}, id

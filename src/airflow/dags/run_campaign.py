@@ -12,7 +12,7 @@ from notifiers.notifier import ArmoniKBenchEmailNotifier
 
 from pathlib import Path
 
-base = Path("/home/qdelamea/airflow_bench_data")
+base = Path(os.environ["AIRFLOW_DATA"])
 
 
 @dag(

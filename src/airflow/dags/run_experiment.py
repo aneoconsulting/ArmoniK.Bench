@@ -41,7 +41,7 @@ from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
 from operators.connection import CreateOrUpdateConnectionOperator, DeleteConnectionOperator
 
 
-base = Path("/home/airflow/gcs/data")
+base = Path(os.environ["AIRFLOW_DATA"])
 repo_path = Path(os.environ.get("AIRFLOW_DATA", os.getcwd())) / "ArmoniK"
 
 get_modules_cmd = (
@@ -275,6 +275,7 @@ def run_experiment():
     def destroy_armonik_cluster() -> None:
         bash_options = {
             "cwd": str(repo_path / "infrastructure/quick-deploy/{{ params.environment }}"),
+            "append_env": True,
             "env": "{{ ti.xcom_pull(task_ids='destroy_armonik_cluster.init', key='env_vars') }}",
         }
 
@@ -354,7 +355,11 @@ def run_experiment():
         conn = Connection.get_connection_from_secrets(conn_id=params["armonik_conn_id"])
         ti.xcom_push(
             key="workload_config",
-            value=update_workload_config(params["workload_config"], conn.host, conn.port),
+            value=update_workload_config(params["workload_config"], conn.host, conn.port)[0],
+        )
+        ti.xcom_push(
+            key="uuid",
+            value=update_workload_config(params["workload_config"], conn.host, conn.port)[1],
         )
 
     prepare_workload_execution = prepare_workload_execution()
@@ -383,8 +388,8 @@ def run_experiment():
             with hook.get_conn() as channel:
                 stats = ArmoniKStatistics(
                     channel=channel,
-                    task_filter=TaskFieldFilter.SESSION_ID
-                    == ti.xcom_pull(task_ids="parse-client-output", key="session-id"),
+                    task_filter=TaskFieldFilter.task_options_key("UUID")
+                    == ti.xcom_pull(task_ids="prepare_workload_execution", key="uuid"),
                     metrics=[
                         AvgThroughput(),
                         TotalElapsedTime(),
@@ -401,8 +406,8 @@ def run_experiment():
                 logger.info("Computing statistics...")
                 stats.compute()
                 tasks_by_status = ArmoniKTasks(channel).count_tasks_by_status(
-                    TaskFieldFilter.SESSION_ID
-                    == ti.xcom_pull(task_ids="parse-client-output", key="session-id")
+                    task_filter=TaskFieldFilter.task_options_key("UUID")
+                    == ti.xcom_pull(task_ids="prepare_workload_execution", key="uuid"),
                 )
                 run_file = (
                     base
