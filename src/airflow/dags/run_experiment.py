@@ -35,7 +35,6 @@ from armonik_bench.common import (
 )
 from git import exc
 from grpc import RpcError
-from kubernetes.client import models as k8s
 
 from notifiers.notifier import ArmoniKBenchEmailNotifier
 from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
@@ -209,7 +208,7 @@ def run_experiment():
                     else:
                         kubeconfig_path = repo_path / f"infrastructure/quick-deploy/{params['environment']}/generated/kubeconfig"
                     with kubeconfig_path.open() as file:
-                        ti.xcom_push(key="kubeconfig", value=json.dumps(yaml.safe_load(file.read())))
+                        ti.xcom_push(key="kubeconfig", value=json.dumps(json.dumps(yaml.safe_load(file.read()))))
                 except FileNotFoundError as error:
                     raise AirflowFailException(f"Can't read deployment outputs: {error}")
 
@@ -222,7 +221,7 @@ def run_experiment():
                 description="Kubernetes connection for a remote ArmoniK cluster.",
                 extra={
                     "in_cluster": False,
-                    "kube_config": "{{ f'{ti.xcom_pull(task_ids='deploy_armonik_cluster.create_kubernetes_connection.read_kubeconfig', key='kubeconfig')}' }}",
+                    "kube_config": "{{ ti.xcom_pull(task_ids='deploy_armonik_cluster.create_kubernetes_connection.read_kubeconfig', key='kubeconfig') }}",
                 },
             )
 
@@ -247,8 +246,8 @@ def run_experiment():
                 conn_id="{{ params.armonik_conn_id }}",
                 conn_type="grpc",
                 description="Connection to ArmoniK control plane.",
-                host=" {{ ti.xcom_pull(task_ids='deploy_armonik_cluster.create_armonik_connection.read_output', key='host') }} ",
-                port=" {{ ti.xcom_pull(task_ids='deploy_armonik_cluster.create_armonik_connection.read_output', key='port') }} ",
+                host="{{ ti.xcom_pull(task_ids='deploy_armonik_cluster.create_armonik_connection.read_output', key='host') }}",
+                port="{{ ti.xcom_pull(task_ids='deploy_armonik_cluster.create_armonik_connection.read_output', key='port') }}",
                 extra=json.dumps({"auth_type": "NO_AUTH"}),
             )
 
@@ -330,7 +329,10 @@ def run_experiment():
         @task.sensor(poke_interval=5, timeout=600, mode="poke")
         def nodes_ready(params: dict[str, any]):
             logger = logging.getLogger("airflow.task")
-            n_nodes = 1 if params["environment"] == "localhost" else params["infra_config"]["gke"]["node_pools"][0]["node_count"]
+            if params["environment"] == "localhost":
+                logger.info("Skip check because working on localhost environment.")
+                return PokeReturnValue(is_done=True)
+            n_nodes = params["infra_config"]["gke"]["node_pools"][0]["node_count"]
             if kubernetes_n_nodes_ready(
                 KubernetesHook(conn_id=params["kubernetes_conn_id"]).core_v1_client,
                 n_nodes,
@@ -364,14 +366,13 @@ def run_experiment():
         labels={"app": "armonik", "service": "run-client", "type": "others"},
         image="{{ params.workload }}",
         env_vars="{{ ti.xcom_pull(task_ids='prepare_workload_execution', key='workload_config') }}",
-        node_selector={"service": "others"},
-        tolerations=[k8s.V1Toleration(effect="NO_SCHEDULE", key="service", value="others")],
         backoff_limit=1,
         completion_mode="NonIndexed",
         completions=1,
         parallelism=1,
         on_finish_action="delete_pod",
         get_logs=True,
+        wait_until_job_complete=True,
     )
 
     @task

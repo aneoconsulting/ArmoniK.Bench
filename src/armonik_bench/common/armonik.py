@@ -1,3 +1,4 @@
+import json
 import uuid
 
 from armonik.client import ArmoniKHealthChecks
@@ -58,4 +59,4 @@ def update_workload_config(
     workload_config[f"{[*workload_config.keys()][0].split('_')[0]}__Options_UUID"] = str(
         uuid.uuid4()
     )
-    return workload_config
+    return {key: json.dumps(value) if not isinstance(value, str) else value for key, value in workload_config.items()}
