@@ -1,5 +1,6 @@
 import argparse
 import pathlib
+import subprocess
 import toml
 
 
@@ -16,6 +17,10 @@ def extra_deps_from_pyproject(sections):
             dependencies.extend(data["project"]["optional-dependencies"][section])
         except KeyError:
             raise ValueError(f"Section '{section}' is not a valid optional dependencies section.")
+
+    dependencies.append(
+        f"armonik_bench @ git+https://github.com/aneoconsulting/ArmoniK.Bench.git@{subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('utf-8').strip()}"
+    )
 
     return dependencies
 

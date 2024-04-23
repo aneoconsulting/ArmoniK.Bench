@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     'armonik>=3.16.1',
+    'GitPython',
     'PyYAML',
 ]
 

@@ -40,7 +40,6 @@ setup_dev_composer() {
 
     log "Generate requirements.txt file"
     python gen_requirements.py --sections airflow,tests
-    echo "armonik_bench @ git+$(git config --get remote.origin.url)@$(git rev-parse HEAD)" >> requirements.txt
 
     log "Copying 'requirements.txt' and 'variables.env' into composer environment"
     cp requirements.txt composer/$LOCAL_ENV_NAME/requirements.txt

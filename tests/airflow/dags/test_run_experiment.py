@@ -106,14 +106,39 @@ def test_dag_options(dag: DAG) -> None:
 def test_dag_structure(dag: DAG) -> None:
     assert_dag_dict_equal(
         {
-            "deploy_armonik": ["warm_up.services_ready", "warm_up.nodes_ready"],
+            "deploy_armonik.init": ["deploy_armonik.get_modules"],
+            "deploy_armonik.get_modules": ["deploy_armonik.terraform_init"],
+            "deploy_armonik.terraform_init": ["deploy_armonik.terraform_apply"],
+            "deploy_armonik.terraform_apply": ["deploy_armonik.terraform_output"],
+            "deploy_armonik.terraform_output": [
+                "deploy_armonik.create_armonik_connection.read_output",
+                "create_kubernetes_connection.read_kubeconfig",
+            ],
+            "deploy_armonik.create_armonik_connection.read_output": [
+                "deploy_armonik.create_armonik_connection.create_connection"
+            ],
+            "deploy_armonik.create_kubernetes_connection.read_kubeconfig": [
+                "deploy_armonik.create_kubernetes_connection.create_connection"
+            ],
+            "deploy_armonik.create_armonik_connection.create_connection": [
+                "deploy_armonik.teardown"
+            ],
+            "deploy_armonik.create_kubernetes_connection.create_connection": [
+                "deploy_armonik.teardown"
+            ],
+            "deploy_armonik.teardown": ["warm_up.services_ready", "warm_up.nodes_ready"],
             "warm_up.services_ready": ["prepare_workload_execution"],
             "warm_up.nodes_ready": ["prepare_workload_execution"],
             "prepare_workload_execution": ["run_client"],
             "run_client": ["commit"],
             "commit": ["skip_destroy"],
-            "skip_destroy": ["destroy_armonik"],
-            "destroy_armonik": [],
+            "skip_destroy": ["destroy_armonik.init"],
+            "destroy_armonik.init": ["destroy_armonik.get_modules"],
+            "destroy_armonik.get_modules": ["destroy_armonik.terraform_init"],
+            "destroy_armonik.terraform_init": ["destroy_armonik.terraform_destroy"],
+            "destroy_armonik.terraform_destroy": ["destroy_armonik.delete_connections"],
+            "destroy_armonik.delete_connections": ["destroy_armonik.teardown"],
+            "destroy_armonik.teardown": [],
         },
         dag,
     )
