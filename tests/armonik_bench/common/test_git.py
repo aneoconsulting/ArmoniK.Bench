@@ -6,7 +6,11 @@ import pytest
 
 from git.repo import Repo
 
-from armonik_bench.common.git import clone_repo, edit_default_parameters_file, setup_terraform_environment
+from armonik_bench.common.git import (
+    clone_repo,
+    edit_default_parameters_file,
+    setup_terraform_environment,
+)
 
 
 @pytest.fixture

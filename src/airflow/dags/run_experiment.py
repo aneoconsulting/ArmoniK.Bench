@@ -204,11 +204,21 @@ def run_experiment():
             def read_kubeconfig(ti: TaskInstance, params: dict[str, str]) -> None:
                 try:
                     if params["environment"] == "localhost":
-                        kubeconfig_path = Path(ti.xcom_pull(task_ids="deploy_armonik_cluster.init", key="env_vars")["KUBE_CONFIG_PATH"])
+                        kubeconfig_path = Path(
+                            ti.xcom_pull(task_ids="deploy_armonik_cluster.init", key="env_vars")[
+                                "KUBE_CONFIG_PATH"
+                            ]
+                        )
                     else:
-                        kubeconfig_path = repo_path / f"infrastructure/quick-deploy/{params['environment']}/generated/kubeconfig"
+                        kubeconfig_path = (
+                            repo_path
+                            / f"infrastructure/quick-deploy/{params['environment']}/generated/kubeconfig"
+                        )
                     with kubeconfig_path.open() as file:
-                        ti.xcom_push(key="kubeconfig", value=json.dumps(json.dumps(yaml.safe_load(file.read()))))
+                        ti.xcom_push(
+                            key="kubeconfig",
+                            value=json.dumps(json.dumps(yaml.safe_load(file.read()))),
+                        )
                 except FileNotFoundError as error:
                     raise AirflowFailException(f"Can't read deployment outputs: {error}")
 
@@ -233,16 +243,30 @@ def run_experiment():
         def create_armonik_connection() -> None:
             @task(trigger_rule="one_success")
             def read_output(ti: TaskInstance) -> None:
-                output_file = Path(ti.xcom_pull(task_ids="deploy_armonik_cluster.init", key="env_vars")["OUTPUT_DIR"])
+                output_file = Path(
+                    ti.xcom_pull(task_ids="deploy_armonik_cluster.init", key="env_vars")[
+                        "OUTPUT_DIR"
+                    ]
+                )
                 with output_file.open() as file:
                     data = json.loads(file.read())
-                    ti.xcom_push(key="host", value=data['armonik']['value']['control_plane_url'].removeprefix('http://').split(':')[0])
-                    ti.xcom_push(key="port", value=data['armonik']['value']['control_plane_url'].removeprefix('http://').split(':')[1])
+                    ti.xcom_push(
+                        key="host",
+                        value=data["armonik"]["value"]["control_plane_url"]
+                        .removeprefix("http://")
+                        .split(":")[0],
+                    )
+                    ti.xcom_push(
+                        key="port",
+                        value=data["armonik"]["value"]["control_plane_url"]
+                        .removeprefix("http://")
+                        .split(":")[1],
+                    )
 
             read_output = read_output()
 
             create_connection = CreateOrUpdateConnectionOperator(
-                task_id="create_armonik_connection",
+                task_id="create_connection",
                 conn_id="{{ params.armonik_conn_id }}",
                 conn_type="grpc",
                 description="Connection to ArmoniK control plane.",
@@ -252,7 +276,7 @@ def run_experiment():
             )
 
             read_output >> create_connection
-        
+
         create_armonik_connection = create_armonik_connection()
 
         @task
@@ -270,6 +294,8 @@ def run_experiment():
             >> [create_armonik_connection, create_kubernetes_connection]
             >> teardown
         )
+
+    deploy_armonik = deploy_armonik_cluster()
 
     @task_group
     def destroy_armonik_cluster() -> None:
@@ -310,8 +336,6 @@ def run_experiment():
         teardown = teardown()
 
         init >> get_modules >> terraform_init >> terraform_destroy >> delete_connections >> teardown
-
-    deploy_armonik = deploy_armonik_cluster()
 
     @task_group
     def warm_up():
