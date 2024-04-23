@@ -41,7 +41,7 @@ from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
 from operators.connection import CreateOrUpdateConnectionOperator, DeleteConnectionOperator
 
 
-base = Path(os.environ["AIRFLOW_DATA"])
+base = Path(os.environ["AIRFLOW__CORE__DATA_FOLDER"])
 repo_path = Path(os.environ.get("AIRFLOW_DATA", os.getcwd())) / "ArmoniK"
 
 get_modules_cmd = (
@@ -176,7 +176,7 @@ def run_experiment():
         }
 
         @task
-        def init(params: dict[str, str], ti: TaskInstance) -> None:
+        def init(params: dict[str, str] | None = None, ti: TaskInstance | None = None) -> None:
             env_vars = init_fct(params)
             ti.xcom_push(key="env_vars", value=env_vars)
 
@@ -201,7 +201,7 @@ def run_experiment():
         @task_group
         def create_kubernetes_connection() -> None:
             @task(trigger_rule="one_success")
-            def read_kubeconfig(ti: TaskInstance, params: dict[str, str]) -> None:
+            def read_kubeconfig(ti: TaskInstance | None = None, params: dict[str, str] | None = None) -> None:
                 try:
                     if params["environment"] == "localhost":
                         kubeconfig_path = Path(
@@ -242,7 +242,7 @@ def run_experiment():
         @task_group
         def create_armonik_connection() -> None:
             @task(trigger_rule="one_success")
-            def read_output(ti: TaskInstance) -> None:
+            def read_output(ti: TaskInstance | None = None) -> None:
                 output_file = Path(
                     ti.xcom_pull(task_ids="deploy_armonik_cluster.init", key="env_vars")[
                         "OUTPUT_DIR"
@@ -306,7 +306,7 @@ def run_experiment():
         }
 
         @task
-        def init(params: dict[str, str], ti: TaskInstance) -> None:
+        def init(params: dict[str, str] | None = None, ti: TaskInstance | None = None) -> None:
             env_vars = init_fct(params)
             ti.xcom_push(key="env_vars", value=env_vars)
 
