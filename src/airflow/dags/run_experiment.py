@@ -16,6 +16,7 @@ from airflow.models.param import Param
 from airflow.models.taskinstance import TaskInstance
 from airflow.operators.bash import BashOperator
 from airflow.providers.cncf.kubernetes.hooks.kubernetes import KubernetesHook
+from airflow.providers.cncf.kubernetes.operators.kubernetes_pod import KubernetesPodOperator
 from airflow.providers.grpc.hooks.grpc import GrpcHook
 from airflow.sensors.base import PokeReturnValue
 from armonik.client import ArmoniKTasks, TaskFieldFilter
@@ -35,6 +36,7 @@ from armonik_bench.common import (
 )
 from git import exc
 from grpc import RpcError
+from kubernetes.client import models as k8s
 
 from notifiers.notifier import ArmoniKBenchEmailNotifier
 from operators.extra_templated import ExtraTemplatedKubernetesJobOperator
@@ -42,15 +44,49 @@ from operators.connection import CreateOrUpdateConnectionOperator, DeleteConnect
 
 
 base = Path(os.environ["AIRFLOW__CORE__DATA_FOLDER"])
-repo_path = Path(os.environ.get("AIRFLOW_DATA", os.getcwd())) / "ArmoniK"
+repo_path = Path(os.environ.get("AIRFLOW__DAGS_WORKDIR", os.getcwd())) / "ArmoniK"
 
-get_modules_cmd = (
-    "git -c advice.detachedHead=false clone --branch $MODULES_VERSION $MODULES_SOURCE $MODULES_DIR"
-)
-terraform_init_cmd = 'terraform init -upgrade -reconfigure -backend-config="secret_suffix=$PREFIX" -var-file=$VERSIONS_FILE -var-file=$PARAMETERS_FILE -var-file=$EXTRA_PARAMETERS_FILE'
-terraform_apply_cmd = "terraform apply -var-file=$VERSIONS_FILE -var-file=$PARAMETERS_FILE -var-file=$EXTRA_PARAMETERS_FILE -auto-approve"
-terraform_output_cmd = "terraform output -json > $OUTPUT_DIR"
-terraform_destroy_cmd = "terraform destroy -var-file=$VERSIONS_FILE -var-file=$PARAMETERS_FILE -var-file=$EXTRA_PARAMETERS_FILE -auto-approve"
+kubernetes_operations = {
+    "operations": {
+        "get_modules": {
+            "name": "get-modules",
+            "image": "ubuntu:latest",
+            "cmds": ["git", "clone $MODULES_SOURCE $MODULES_DIR"],
+            "arguments": ["-c", "advice.detachedHead=false", "--branch $MODULES_VERSION"],
+        },
+        "init": {
+            "name": "terraform-init",
+            "image": "hashicorp/terraform:1.8",
+            "cmds": ["terraform" "init"],
+            "arguments": ["-upgrade -reconfigure", "-backend-config=\"secret_suffix=$PREFIX\"" "-var-file=$VERSIONS_FILE" "-var-file=$PARAMETERS_FILE" "-var-file=$EXTRA_PARAMETERS_FILE"],
+        },
+        "apply": {
+            "name": "terraform-apply",
+            "image": "hashicorp/terraform:1.8",
+            "cmds": ["terraform", "apply"],
+            "arguments": ["-var-file=$VERSIONS_FILE", "-var-file=$PARAMETERS_FILE", "-var-file=$EXTRA_PARAMETERS_FILE", "-auto-approve"],
+        },
+        "output": {
+            "name": "terraform-output",
+            "image": "hashicorp/terraform:1.8",
+            "cmds": ["terraform output -json > $OUTPUT_DIR"],
+            "arguments": []
+        },
+        "destroy": {
+            "name": "terraform-destroy",
+            "image": "hashicorp/terraform:1.8",
+            "cmds": ["terraform", "destroy"],
+            "arguments": ["-var-file=$VERSIONS_FILE", "-var-file=$PARAMETERS_FILE", "-var-file=$EXTRA_PARAMETERS_FILE", "-auto-approve"]
+        },
+    },
+    "options": {
+        "namespace": "composer-user-workloads",
+        "volume_mounts": [k8s.V1VolumeMount(mount_path="/temp/workdir", name="pvc-workdir-vol")],
+        "volumes": [k8s.V1Volume(name="pvc-workdir-vol", persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(claim_name="pvc-workdir"))],
+        "reattach_on_restart": True,
+        "is_delete_operator_pod": True,
+    },
+}
 
 
 def init_fct(params: dict[str, str]) -> dict[str, str]:
@@ -169,7 +205,7 @@ def run_experiment():
 
     @task_group
     def deploy_armonik_cluster() -> None:
-        bash_options = {
+        env_vars = {
             "cwd": str(repo_path / "infrastructure/quick-deploy/{{ params.environment }}"),
             "append_env": True,
             "env": "{{ ti.xcom_pull(task_ids='deploy_armonik_cluster.init', key='env_vars') }}",
@@ -182,20 +218,32 @@ def run_experiment():
 
         init = init()
 
-        get_modules = BashOperator(
-            task_id="get_modules", bash_command=get_modules_cmd, **bash_options
+        get_modules = KubernetesPodOperator(
+            task_id="get_modules",
+            **kubernetes_operations["operations"]["get_modules"],
+            **kubernetes_operations["options"],
+            env_vars=env_vars,
         )
 
-        terraform_init = BashOperator(
-            task_id="terraform_init", bash_command=terraform_init_cmd, **bash_options
+        terraform_init = KubernetesPodOperator(
+            task_id="terraform_init",
+            **kubernetes_operations["operations"]["init"],
+            **kubernetes_operations["options"],
+            env_vars=env_vars,
         )
 
-        terraform_apply = BashOperator(
-            task_id="terraform_apply", bash_command=terraform_apply_cmd, **bash_options
+        terraform_apply = KubernetesPodOperator(
+            task_id="terraform_apply",
+            **kubernetes_operations["operations"]["apply"],
+            **kubernetes_operations["options"],
+            env_vars=env_vars,
         )
 
-        terraform_output = BashOperator(
-            task_id="terraform_output", bash_command=terraform_output_cmd, **bash_options
+        terraform_output = KubernetesPodOperator(
+            task_id="terraform_output",
+            **kubernetes_operations["operations"]["output"],
+            **kubernetes_operations["options"],
+            env_vars=env_vars,
         )
 
         @task_group
@@ -299,7 +347,7 @@ def run_experiment():
 
     @task_group
     def destroy_armonik_cluster() -> None:
-        bash_options = {
+        env_vars = {
             "cwd": str(repo_path / "infrastructure/quick-deploy/{{ params.environment }}"),
             "append_env": True,
             "env": "{{ ti.xcom_pull(task_ids='destroy_armonik_cluster.init', key='env_vars') }}",
@@ -312,16 +360,25 @@ def run_experiment():
 
         init = init()
 
-        get_modules = BashOperator(
-            task_id="get_modules", bash_command=get_modules_cmd, **bash_options
+        get_modules = KubernetesPodOperator(
+            task_id="get_modules",
+            **kubernetes_operations["operations"]["get_modules"],
+            **kubernetes_operations["options"],
+            env_vars=env_vars,
         )
 
-        terraform_init = BashOperator(
-            task_id="terraform_init", bash_command=terraform_init_cmd, **bash_options
+        terraform_init = KubernetesPodOperator(
+            task_id="terraform_init",
+            **kubernetes_operations["operations"]["init"],
+            **kubernetes_operations["options"],
+            env_vars=env_vars,
         )
 
-        terraform_destroy = BashOperator(
-            task_id="terraform_destroy", bash_command=terraform_destroy_cmd, **bash_options
+        terraform_destroy = KubernetesPodOperator(
+            task_id="terraform_destroy",
+            **kubernetes_operations["operations"]["destroy"],
+            **kubernetes_operations["options"],
+            env_vars=env_vars,
         )
 
         delete_connections = DeleteConnectionOperator(
