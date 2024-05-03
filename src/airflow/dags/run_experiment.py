@@ -42,8 +42,11 @@ with the Cloud Composer environment.
 import os
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from airflow.decorators import dag
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+from kubernetes.client import models as k8s
 
 
 @dag(
@@ -70,7 +73,39 @@ from airflow.decorators import dag
     ),
 )
 def run_experiment():
-    pass
+    KubernetesPodOperator(
+        task_id="setup",
+        name="setup",
+        image="python:3.11.5",
+        cmds=["bash", "-cx"],
+        arguments=[
+            r'python -c "import os;f = open(\"/tmp/workdir/setup.py\", \"w\"); '
+            r'f.write(os.environ[\"_PYTHON_SCRIPT\"]); f.close()" && '
+            "python /tmp/workdir/setup.py"
+        ],
+        namespace="composer-user-workloads",
+        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
+        volumes=[
+            k8s.V1Volume(
+                name="pvc-workdir-vol",
+                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+                    claim_name="pvc-workdir"
+                ),
+            )
+        ],
+        reattach_on_restart=True,
+        on_finish_action="delete_succeeded_pod",
+        config_file="/home/airflow/composer_kube_config",
+        kubernetes_conn_id="kubernetes_default",
+        env_vars={
+            "_PYTHON_SCRIPT": (Path(__file__).parent / "scripts/setup.py").open().read(),
+            "SETUP_SCRIPT__REPO_REF": "fl/optional-upload",
+            "SETUP_SCRIPT__AK_CONFIG": Path("/home/airflow/gcs/data/config.json").open().read(),
+            "SETUP_SCRIPT__REPO_PATH": "/tmp/workdir/ArmoniK",
+            "SETUP_SCRIPT__REPO_URL": "https://github.com/aneoconsulting/ArmoniK",
+            "SETUP_SCRIPT__AK_ENVIRONMENT": "gcp",
+        },
+    )
 
 
 run_experiment()
