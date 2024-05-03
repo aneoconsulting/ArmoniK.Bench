@@ -18,5 +18,5 @@ data "generic_local_cmd" "gcloud_project" {
 locals {
   project      = coalesce(var.project, data.generic_local_cmd.gcloud_project.outputs.project)
   region       = var.region
-  cluster_name = split("/", google_composer_environment.composer_environment.config.0.gke_cluster)[5]
+  cluster_name = split("/", google_composer_environment.composer_environment.config[0].gke_cluster)[5]
 }
