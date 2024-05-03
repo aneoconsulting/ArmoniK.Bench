@@ -33,6 +33,7 @@ exclude=['tests']
 "*" = ["*.pyi"]
 
 [project.optional-dependencies]
+airflow = []
 dev = [
     'mypy',
     'ruff'
