@@ -1,6 +1,5 @@
 import argparse
 import logging
-import re
 from google.cloud import storage
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)

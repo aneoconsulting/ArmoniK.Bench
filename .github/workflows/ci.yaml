@@ -68,7 +68,7 @@ jobs:
       - name: Get Cover
         uses: orgoro/coverage@6d7a2607343d2abeab89ef40b54ec9785134e313
         with:
-          coverageFile: packages/python/coverage.xml
+          coverageFile: coverage.xml
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Archive code coverage results html
