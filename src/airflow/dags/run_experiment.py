@@ -44,8 +44,9 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from airflow.decorators import dag
+from airflow.decorators import dag, task
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartJobOperator
 from kubernetes.client import models as k8s
 
 
@@ -238,6 +239,46 @@ def run_experiment():
         },
     )
 
+    @task(multiple_outputs=True)
+    def parse_terraform_output(outputs: dict[str, dict]) -> dict[str, str]:
+        return {
+            "cluster_name": outputs["gke"]["value"]["name"],
+            "cluster_region": outputs["gke"]["value"]["region"],
+            "armonik_control_plane_url": outputs["armonik"]["value"]["control_plane_url"],
+        }
+
+    parse_terraform_output = parse_terraform_output(terraform_output.output["return_value"])
+
+    run_client = GKEStartJobOperator(
+        task_id="run_client",
+        location=parse_terraform_output["cluster_region"],
+        cluster_name=parse_terraform_output["cluster_name"],
+        name="run-client",
+        namespace="armonik",
+        labels={"app": "armonik", "service": "run-client", "type": "others"},
+        image="dockerhubaneo/armonik_core_htcmock_test_client:0.23.1",
+        env_vars={
+            "GrpcClient__Endpoint": parse_terraform_output["armonik_control_plane_url"],
+            "HtcMock__NTasks": "10",
+            "HtcMock__TotalCalculationTime": "00:00:00.0",
+            "HtcMock__DataSize": "0",
+            "HtcMock__MemorySize": "0",
+            "HtcMock__SubTasksLevels": "2",
+            "HtcMock__EnableUseLowMem": "false",
+            "HtcMock__EnableSmallOutput": "false",
+            "HtcMock__EnableFastCompute": "false",
+            "HtcMock__Partition": "htcmock",
+        },
+        backoff_limit=1,
+        completion_mode="NonIndexed",
+        completions=1,
+        parallelism=1,
+        node_selector={"service": "others"},
+        tolerations=[k8s.V1Toleration(effect="NoSchedule", key="service", value="others")],
+        on_finish_action="delete_pod",
+        wait_until_job_complete=True,
+    )
+
     terraform_destroy = KubernetesPodOperator(
         task_id="terraform_destroy",
         name="terraform-destroy",
@@ -288,7 +329,15 @@ def run_experiment():
         },
     )
 
-    setup >> terraform_init >> terraform_apply >> terraform_output >> terraform_destroy
+    (
+        setup
+        >> terraform_init
+        >> terraform_apply
+        >> terraform_output
+        >> parse_terraform_output
+        >> run_client
+        >> terraform_destroy
+    )
 
 
 run_experiment()
