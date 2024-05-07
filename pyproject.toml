@@ -33,6 +33,10 @@ exclude=['tests']
 "*" = ["*.pyi"]
 
 [project.optional-dependencies]
+airflow = [
+  'apache-airflow-providers-google>=10.17.0',
+  'apache-airflow-providers-cncf-kubernetes>=8.1.1',
+]
 dev = [
     'mypy',
     'ruff'
