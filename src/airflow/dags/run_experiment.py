@@ -73,7 +73,7 @@ from kubernetes.client import models as k8s
     ),
 )
 def run_experiment():
-    KubernetesPodOperator(
+    setup = KubernetesPodOperator(
         task_id="setup",
         name="setup",
         image="python:3.11.5",
@@ -106,6 +106,49 @@ def run_experiment():
             "SETUP_SCRIPT__AK_ENVIRONMENT": "gcp",
         },
     )
+
+    terraform_init = KubernetesPodOperator(
+        task_id="terraform_init",
+        name="terraform-init",
+        image="hashicorp/terraform:1.8",
+        cmds=["terraform"],
+        arguments=["init", "-upgrade", "-reconfigure", "-backend-config=bucket=$(PREFIX)-tfstate"],
+        namespace="composer-user-workloads",
+        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
+        volumes=[
+            k8s.V1Volume(
+                name="pvc-workdir-vol",
+                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+                    claim_name="pvc-workdir"
+                ),
+            )
+        ],
+        reattach_on_restart=True,
+        on_finish_action="delete_succeeded_pod",
+        config_file="/home/airflow/composer_kube_config",
+        kubernetes_conn_id="kubernetes_default",
+        full_pod_spec=k8s.V1Pod(
+            spec=k8s.V1PodSpec(
+                containers=[
+                    k8s.V1Container(
+                        working_dir="/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp",
+                        name="terraform",
+                    )
+                ]
+            )
+        ),
+        env_vars={
+            "PREFIX": "airflow-bench",
+            "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
+            "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
+            "TF_VAR_region": "us-central1",
+            "TF_VAR_namespace": "armonik",
+            "TF_VAR_prefix": "airflow-bench",
+            "TF_VAR_project": "armonik-gcp-13469",
+        },
+    )
+
+    setup >> terraform_init
 
 
 run_experiment()
