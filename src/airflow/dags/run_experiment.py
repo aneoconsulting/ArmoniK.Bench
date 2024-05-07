@@ -238,7 +238,57 @@ def run_experiment():
         },
     )
 
-    setup >> terraform_init >> terraform_apply >> terraform_output
+    terraform_destroy = KubernetesPodOperator(
+        task_id="terraform_destroy",
+        name="terraform-destroy",
+        image="hashicorp/terraform:1.8",
+        cmds=["terraform"],
+        arguments=[
+            "destroy",
+            "-var-file=$(VERSIONS_FILE)",
+            "-var-file=$(PARAMETERS_FILE)",
+            "-var-file=$(EXTRA_PARAMETERS_FILE)",
+            "-auto-approve",
+        ],
+        namespace="composer-user-workloads",
+        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
+        volumes=[
+            k8s.V1Volume(
+                name="pvc-workdir-vol",
+                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+                    claim_name="pvc-workdir"
+                ),
+            )
+        ],
+        reattach_on_restart=True,
+        on_finish_action="delete_succeeded_pod",
+        config_file="/home/airflow/composer_kube_config",
+        kubernetes_conn_id="kubernetes_default",
+        full_pod_spec=k8s.V1Pod(
+            spec=k8s.V1PodSpec(
+                containers=[
+                    k8s.V1Container(
+                        working_dir="/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp",
+                        name="terraform",
+                    )
+                ]
+            )
+        ),
+        env_vars={
+            "PREFIX": "airflow-bench",
+            "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
+            "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
+            "TF_VAR_region": "us-central1",
+            "TF_VAR_namespace": "armonik",
+            "TF_VAR_prefix": "airflow-bench",
+            "TF_VAR_project": "armonik-gcp-13469",
+            "EXTRA_PARAMETERS_FILE": "/tmp/workdir/ArmoniK/extra.tfvars.json",
+            "VERSIONS_FILE": "/tmp/workdir/ArmoniK/versions.tfvars.json",
+            "PARAMETERS_FILE": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/parameters.tfvars.json",
+        },
+    )
+
+    setup >> terraform_init >> terraform_apply >> terraform_output >> terraform_destroy
 
 
 run_experiment()
