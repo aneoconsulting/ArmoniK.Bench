@@ -5,6 +5,8 @@ environment = {
   pypi_packages = {
     apache-airflow-providers-google          = ">=10.17.0"
     apache-airflow-providers-cncf-kubernetes = ">=8.1.1"
+    apache-airflow-providers-grpc            = ">=3.5.0"
+    armonik                                  = ">=3.16"
   }
   env_variables = {
     DAGS__RUN_EXPERIMENT__DEPLOY_WORKDIR = "/tmp/workdir"

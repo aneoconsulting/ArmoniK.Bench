@@ -46,7 +46,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from airflow.decorators import dag, task
+from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowFailException
 from airflow.models.param import Param
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
@@ -54,6 +54,8 @@ from kubernetes.client import models as k8s
 
 from operators.connections import UpdateAirflowConnectionOperator
 from operators.run_client import RunArmoniKClientOperator
+from operators.warm_up import ArmoniKServicesHealthCheckSensor, KubernetesNodesReadySensor
+
 from utils.kubeconfig import generate_gke_kube_config
 from utils.filters import (
     get_control_plane_host_from_tf_outputs,
@@ -116,6 +118,7 @@ def run_experiment():
             "infra_environment": environment["type"],
             "infra_region": environment["region"],
             "infra_config": json.dumps(environment["config"]),
+            "infra_worker_nodes": environment["config"]["gke"]["node_pools"][0]["node_count"],
             "repo_url": environment["repo_url"],
             "repo_ref": environment["repo_ref"],
             "workload_image": workload["image"],
@@ -319,6 +322,26 @@ def run_experiment():
         extra=json.dumps({"auth_type": "NO_AUTH"}),
     )
 
+    @task_group
+    def warm_up():
+        KubernetesNodesReadySensor(
+            task_id="worker_nodes_ready",
+            n_nodes=load_experiment["infra_worker_nodes"],
+            node_name_pattern=".*worker.*",
+            kubernetes_conn_id="armonik_kubernetes_default",
+            poke_interval=timedelta(seconds=10),
+            timeout=timedelta(minutes=10),
+        )
+
+        ArmoniKServicesHealthCheckSensor(
+            task_id="armonik_services_ready",
+            armonik_conn_id="armonik_default",
+            poke_interval=timedelta(seconds=10),
+            timeout=timedelta(minutes=10),
+        )
+
+    warm_up = warm_up()
+
     run_client = RunArmoniKClientOperator(
         task_id="run_client",
         image=load_experiment["workload_image"],
@@ -383,6 +406,7 @@ def run_experiment():
         >> terraform_output
         >> get_kubeconfig
         >> [update_kube_connection, update_armonik_connection]
+        >> warm_up
         >> run_client
         >> terraform_destroy
     )
