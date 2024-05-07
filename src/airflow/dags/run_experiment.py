@@ -198,7 +198,47 @@ def run_experiment():
         },
     )
 
-    setup >> terraform_init >> terraform_apply
+    terraform_output = KubernetesPodOperator(
+        task_id="terraform_output",
+        name="terraform-output",
+        image="hashicorp/terraform:1.8",
+        cmds=["sh", "-c"],
+        arguments=[
+            "mkdir -p /airflow/xcom && terraform output -state=$(STATE_FILE) -json > /airflow/xcom/return.json"
+        ],
+        namespace="composer-user-workloads",
+        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
+        volumes=[
+            k8s.V1Volume(
+                name="pvc-workdir-vol",
+                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+                    claim_name="pvc-workdir"
+                ),
+            )
+        ],
+        reattach_on_restart=True,
+        do_xcom_push=True,
+        on_finish_action="delete_succeeded_pod",
+        config_file="/home/airflow/composer_kube_config",
+        kubernetes_conn_id="kubernetes_default",
+        full_pod_spec=k8s.V1Pod(
+            spec=k8s.V1PodSpec(
+                containers=[
+                    k8s.V1Container(
+                        working_dir="/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp",
+                        name="terraform",
+                    )
+                ]
+            )
+        ),
+        env_vars={
+            "STATE_FILE": "armonik-terraform.tfstate",
+            "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
+            "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
+        },
+    )
+
+    setup >> terraform_init >> terraform_apply >> terraform_output
 
 
 run_experiment()
