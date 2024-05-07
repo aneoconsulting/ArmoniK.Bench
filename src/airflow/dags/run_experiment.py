@@ -53,6 +53,10 @@ from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperato
 from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartJobOperator
 from kubernetes.client import models as k8s
 
+from operators.connections import UpdateAirflowConnectionOperator
+from utils.kubeconfig import generate_gke_kube_config
+
+
 data_dir = Path("/home/airflow/gcs/data")
 
 
@@ -287,6 +291,22 @@ def run_experiment():
 
     parse_terraform_output = parse_terraform_output(terraform_output.output["return_value"])
 
+    @task
+    def get_kubeconfig(cluster_name: str, cluster_region: str):
+        return generate_gke_kube_config("armonik-gcp-13469", cluster_name, cluster_region)
+
+    get_kubeconfig = get_kubeconfig(
+        parse_terraform_output["cluster_name"], parse_terraform_output["cluster_region"]
+    )
+
+    update_kube_connection = UpdateAirflowConnectionOperator(
+        task_id="update_kube_connection",
+        conn_id="armonik_kubernetes_default",
+        conn_type="kubernetes",
+        description="Kubernetes connection for a remote ArmoniK cluster.",
+        extra={"in_cluster": False, "kube_config": get_kubeconfig["return_value"]},
+    )
+
     run_client = GKEStartJobOperator(
         task_id="run_client",
         location=parse_terraform_output["cluster_region"],
@@ -375,6 +395,8 @@ def run_experiment():
         >> terraform_apply
         >> terraform_output
         >> parse_terraform_output
+        >> get_kubeconfig
+        >> update_kube_connection
         >> run_client
         >> terraform_destroy
     )
