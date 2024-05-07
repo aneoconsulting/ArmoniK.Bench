@@ -43,3 +43,6 @@ tests = [
   'pytest-cov',
   'pytest-benchmark[histogram]',
 ]
+utils = [
+  'google-cloud-storage'
+]

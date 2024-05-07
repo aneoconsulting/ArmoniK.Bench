@@ -10,9 +10,6 @@ fix = false
 # Enable application of unsafe fixes.
 unsafe-fixes = false
 
-# Whether to show source code snippets when reporting lint violation.
-show-source = false
-
 # Enumerate all fixed violations.
 show-fixes = true
 
