@@ -38,7 +38,7 @@ airflow = [
   'apache-airflow-providers-cncf-kubernetes>=8.1.1',
   'apache-airflow-providers-google>=10.17.0',
   'apache-airflow-providers-grpc>=3.5.0',
-  'polars',
+  'polars>=0.20.24',
 ]
 dev = [
     'mypy',

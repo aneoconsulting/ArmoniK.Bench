@@ -7,6 +7,7 @@ environment = {
     apache-airflow-providers-cncf-kubernetes = ">=8.1.1"
     apache-airflow-providers-grpc            = ">=3.5.0"
     armonik                                  = ">=3.16"
+    polars                                   = ">=0.20.24"
   }
   env_variables = {
     DAGS__RUN_EXPERIMENT__DEPLOY_WORKDIR = "/tmp/workdir"

@@ -48,11 +48,13 @@ from pathlib import Path
 
 from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowFailException
+from airflow.models.dagrun import DagRun
 from airflow.models.param import Param
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from kubernetes.client import models as k8s
 
 from operators.connections import UpdateAirflowConnectionOperator
+from operators.dump import ArmoniKDumpData
 from operators.run_client import RunArmoniKClientOperator
 from operators.warm_up import ArmoniKServicesHealthCheckSensor, KubernetesNodesReadySensor
 
@@ -93,7 +95,12 @@ data_dir = Path("/home/airflow/gcs/data")
     params={
         "experiment_id": Param(
             default="", description="ID of the experiment to be run by the workflow", type="string"
-        )
+        ),
+        "destroy": Param(
+            default=False,
+            description="Whether or not to destroy the ArmoniK cluster at the end of the experiment run",
+            type="boolean",
+        ),
     },
     dagrun_timeout=timedelta(
         minutes=int(os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT", 300))
@@ -348,6 +355,18 @@ def run_experiment():
         config=load_experiment["workload_config"],
     )
 
+    dump_data = ArmoniKDumpData(
+        task_id="dump_data",
+        job_uuid=run_client.output["job_uuid"],
+        data_dir=data_dir,
+    )
+
+    @task.short_circuit(trigger_rule="all_done", ignore_downstream_trigger_rules=False)
+    def skip_destroy(params: dict[str, str] | None = None) -> bool:
+        return params["destroy"]
+
+    skip_destroy = skip_destroy()
+
     terraform_destroy = KubernetesPodOperator(
         task_id="terraform_destroy",
         name="terraform-destroy",
@@ -398,6 +417,25 @@ def run_experiment():
         },
     )
 
+    @task(trigger_rule="all_done")
+    def commit(
+        run_id: str, params: dict[str, str] | None = None, dag_run: DagRun | None = None
+    ) -> None:
+        with (data_dir / f"experiment_runs/{run_id}").open("w") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "experiment_id": params["experiment_id"],
+                        "start": str(dag_run.start_date),
+                        "end": str(datetime.now()),
+                        "status": str(dag_run.state),
+                        "data_loc": str(data_dir / f"dumps/{run_id}.parquet"),
+                    }
+                )
+            )
+
+    commit = commit(run_id=dump_data.output["run_id"])
+
     (
         load_experiment
         >> setup
@@ -408,7 +446,9 @@ def run_experiment():
         >> [update_kube_connection, update_armonik_connection]
         >> warm_up
         >> run_client
+        >> [skip_destroy, dump_data]
         >> terraform_destroy
+        >> commit
     )
 
 
