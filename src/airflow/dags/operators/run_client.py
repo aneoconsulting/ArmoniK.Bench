@@ -52,7 +52,9 @@ class RunArmoniKClientOperator(KubernetesJobOperator):
         self.env_vars.extend(
             [
                 k8s.V1EnvVar(name="GrpcClient__Endpoint", value=self.get_endpoint()),
-                k8s.V1EnvVar(name=f"{self.get_workload_env_var_prefix()}__UUID", value=job_uuid),
+                k8s.V1EnvVar(
+                    name=f"{self.get_workload_env_var_prefix()}__Options__UUID", value=job_uuid
+                ),
             ]
         )
 
