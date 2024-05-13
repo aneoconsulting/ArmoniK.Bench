@@ -39,15 +39,21 @@ The outputs of the DAG are stored in the 'data' folder of Google Cloud Storage b
 with the Cloud Composer environment.
 """
 
+import json
+import logging
 import os
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from airflow.decorators import dag, task
+from airflow.exceptions import AirflowFailException
+from airflow.models.param import Param
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartJobOperator
 from kubernetes.client import models as k8s
+
+data_dir = Path("/home/airflow/gcs/data")
 
 
 @dag(
@@ -58,6 +64,8 @@ from kubernetes.client import models as k8s
     # UI parameters
     description="Carry out a benchmark experiment on a given ArmoniK application and deployment",
     doc_md=__doc__,
+    # Jinja templating parameters
+    render_template_as_native_obj=True,
     # Scaling parameters
     max_active_tasks=int(os.environ.get("DAG__RUN_EXPERIMENT__MAX_ACTIVE_TASKS", 10)),
     max_active_runs=1,
@@ -68,12 +76,42 @@ from kubernetes.client import models as k8s
         "retries": 1,
         "retry_delay": timedelta(seconds=10),
     },
-    params={},
+    params={
+        "experiment_id": Param(
+            default="", description="ID of the experiment to be run by the workflow", type="string"
+        )
+    },
     dagrun_timeout=timedelta(
         minutes=int(os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT", 300))
     ),
 )
 def run_experiment():
+    @task(multiple_outputs=True)
+    def load_experiment(params: dict[str, str] | None = None) -> dict[str, str | dict[str, str]]:
+        logger = logging.getLogger("airflow.task")
+        experiment_id = params["experiment_id"]
+        if not experiment_id:
+            raise AirflowFailException("Experiment ID is empty.")
+        logger.info(f"Loading experiment {experiment_id}.")
+
+        with (data_dir / f"experiments/{experiment_id}").open() as experiment_file:
+            experiment = json.loads(experiment_file.read())
+        with (data_dir / f"environments/{experiment['environment']}").open() as environment_file:
+            environment = json.loads(environment_file.read())
+        with (data_dir / f"workloads/{experiment['workload']}").open() as workload_file:
+            workload = json.loads(workload_file.read())
+        return {
+            "infra_environment": environment["type"],
+            "infra_region": environment["region"],
+            "infra_config": json.dumps(environment["config"]),
+            "repo_url": environment["repo_url"],
+            "repo_ref": environment["repo_ref"],
+            "workload_image": workload["image"],
+            "workload_config": workload["config"],
+        }
+
+    load_experiment = load_experiment()
+
     setup = KubernetesPodOperator(
         task_id="setup",
         name="setup",
@@ -100,11 +138,11 @@ def run_experiment():
         kubernetes_conn_id="kubernetes_default",
         env_vars={
             "_PYTHON_SCRIPT": (Path(__file__).parent / "scripts/setup.py").open().read(),
-            "SETUP_SCRIPT__REPO_REF": "fl/optional-upload",
-            "SETUP_SCRIPT__AK_CONFIG": Path("/home/airflow/gcs/data/config.json").open().read(),
+            "SETUP_SCRIPT__REPO_REF": load_experiment["repo_ref"],
+            "SETUP_SCRIPT__AK_CONFIG": load_experiment["infra_config"],
             "SETUP_SCRIPT__REPO_PATH": "/tmp/workdir/ArmoniK",
-            "SETUP_SCRIPT__REPO_URL": "https://github.com/aneoconsulting/ArmoniK",
-            "SETUP_SCRIPT__AK_ENVIRONMENT": "gcp",
+            "SETUP_SCRIPT__REPO_URL": load_experiment["repo_url"],
+            "SETUP_SCRIPT__AK_ENVIRONMENT": load_experiment["infra_environment"],
         },
     )
 
@@ -142,7 +180,7 @@ def run_experiment():
             "PREFIX": "airflow-bench",
             "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
             "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
-            "TF_VAR_region": "us-central1",
+            "TF_VAR_region": load_experiment["infra_region"],
             "TF_VAR_namespace": "armonik",
             "TF_VAR_prefix": "airflow-bench",
             "TF_VAR_project": "armonik-gcp-13469",
@@ -189,7 +227,7 @@ def run_experiment():
             "PREFIX": "airflow-bench",
             "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
             "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
-            "TF_VAR_region": "us-central1",
+            "TF_VAR_region": load_experiment["infra_region"],
             "TF_VAR_namespace": "armonik",
             "TF_VAR_prefix": "airflow-bench",
             "TF_VAR_project": "armonik-gcp-13469",
@@ -256,7 +294,7 @@ def run_experiment():
         name="run-client",
         namespace="armonik",
         labels={"app": "armonik", "service": "run-client", "type": "others"},
-        image="dockerhubaneo/armonik_core_htcmock_test_client:0.23.1",
+        image=load_experiment["workload_image"],
         env_vars={
             "GrpcClient__Endpoint": parse_terraform_output["armonik_control_plane_url"],
             "HtcMock__NTasks": "10",
@@ -276,6 +314,7 @@ def run_experiment():
         node_selector={"service": "others"},
         tolerations=[k8s.V1Toleration(effect="NoSchedule", key="service", value="others")],
         on_finish_action="delete_pod",
+        log_pod_spec_on_failure=True,
         wait_until_job_complete=True,
     )
 
@@ -319,7 +358,7 @@ def run_experiment():
             "PREFIX": "airflow-bench",
             "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
             "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
-            "TF_VAR_region": "us-central1",
+            "TF_VAR_region": load_experiment["infra_region"],
             "TF_VAR_namespace": "armonik",
             "TF_VAR_prefix": "airflow-bench",
             "TF_VAR_project": "armonik-gcp-13469",
@@ -330,7 +369,8 @@ def run_experiment():
     )
 
     (
-        setup
+        load_experiment
+        >> setup
         >> terraform_init
         >> terraform_apply
         >> terraform_output
