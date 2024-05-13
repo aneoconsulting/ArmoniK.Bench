@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -24,6 +25,15 @@ class ArmoniKDumpData(BaseOperator):
         self.data_dir = data_dir
         self.armonik_conn_id = armonik_conn_id
 
+    @staticmethod
+    def _parse_tasks(tasks):
+        tasks_dict = defaultdict(list)
+        for t in tasks:
+            t.options.options = dict(t.options.options)
+            for k, v in t.__dict__.items():
+                tasks_dict[k].append(v)
+        return tasks_dict
+
     def pull_tasks(self) -> pl.DataFrame:
         try:
             with GrpcHook(grpc_conn_id=self.armonik_conn_id).get_conn() as channel:
@@ -40,11 +50,13 @@ class ArmoniKDumpData(BaseOperator):
 
                 page = 0
                 total, tasks = task_client.list_tasks(**list_options, page=page)
-                df = pl.DataFrame(tasks)
+                df = pl.DataFrame(self._parse_tasks(tasks))
+                page += 1
+                _, tasks = task_client.list_tasks(**list_options, page=page)
                 while tasks:
+                    df = df.vstack(pl.DataFrame(self._parse_tasks(tasks)))
                     page += 1
                     _, tasks = task_client.list_tasks(**list_options, page=page)
-                    df = df.vstack(pl.DataFrame(tasks))
                 return df
         except RpcError as error:
             raise AirflowException(error)

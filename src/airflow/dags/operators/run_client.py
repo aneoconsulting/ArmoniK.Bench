@@ -49,14 +49,13 @@ class RunArmoniKClientOperator(KubernetesJobOperator):
     def execute(self, context: Context):
         job_uuid = str(uuid.uuid4())
         self.env_vars = [k8s.V1EnvVar(name=key, value=value) for key, value in self.config.items()]
-        self.env_vars.extend(
-            [
-                k8s.V1EnvVar(name="GrpcClient__Endpoint", value=self.get_endpoint()),
-                k8s.V1EnvVar(
-                    name=f"{self.get_workload_env_var_prefix()}__Options__UUID", value=job_uuid
-                ),
-            ]
-        )
+        additional_env_vars = {
+            "GrpcClient__Endpoint": self.get_endpoint(),
+            f"{self.get_workload_env_var_prefix()}__Options__UUID": job_uuid,
+        }
+        for key, value in additional_env_vars.items():
+            self.log.info(f"Adding environment variable {key} with value {value} to the workload.")
+            self.env_vars.append(k8s.V1EnvVar(name=key, value=value))
 
         ti: TaskInstance = context["ti"]
         ti.xcom_push(key="job_uuid", value=job_uuid)
