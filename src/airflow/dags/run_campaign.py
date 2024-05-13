@@ -35,11 +35,18 @@ The outputs of the DAG are stored in the 'data' folder of Google Cloud Storage b
 with the Cloud Composer environment.
 """
 
+import json
 import os
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from airflow.decorators import dag
+from airflow.decorators import dag, task
+from airflow.exceptions import AirflowFailException
+from airflow.models.param import Param
+
+
+data_dir = Path("/home/airflow/gcs/data")
 
 
 @dag(
@@ -72,7 +79,17 @@ from airflow.decorators import dag
     ),
 )
 def run_campaign():
-    pass
+    @task
+    def load_campaign(params: dict[str, str] | None = None) -> list[str]:
+        campaign_id = params["campaign_id"]
+
+        if not campaign_id:
+            raise AirflowFailException("Campaign ID is empty.")
+
+        with (data_dir / f"campaigns/{campaign_id}").open() as f:
+            return json.loads(f.read())["experiments"]
+
+    load_campaign()
 
 
 run_campaign()
