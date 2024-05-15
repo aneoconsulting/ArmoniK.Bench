@@ -109,3 +109,4 @@ ENV/
 .terraform
 .terraform.lock.hcl
 generated
+*.tfstate*
