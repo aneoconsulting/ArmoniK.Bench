@@ -59,3 +59,12 @@ resource "generic_local_cmd" "kubeconfig" {
     EOT
   }
 }
+
+# Synchronises local DAG files with those in the Cloud Composer environment.
+resource "google_storage_bucket_object" "python_files" {
+  for_each = { for dag_file in local.dag_files : dag_file => dag_file }
+
+  name   = "dags/${each.value}"
+  bucket = local.bucket_name
+  source = "${local.dags_path}/${each.value}"
+}
