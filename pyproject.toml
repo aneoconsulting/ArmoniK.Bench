@@ -34,8 +34,11 @@ exclude=['tests']
 
 [project.optional-dependencies]
 airflow = [
-  'apache-airflow-providers-google>=10.17.0',
+  'armonik>=3.16',
   'apache-airflow-providers-cncf-kubernetes>=8.1.1',
+  'apache-airflow-providers-google>=10.17.0',
+  'apache-airflow-providers-grpc>=3.5.0',
+  'polars',
 ]
 dev = [
     'mypy',
