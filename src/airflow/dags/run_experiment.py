@@ -50,10 +50,10 @@ from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
 from airflow.models.param import Param
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
-from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartJobOperator
 from kubernetes.client import models as k8s
 
 from operators.connections import UpdateAirflowConnectionOperator
+from operators.run_client import RunArmoniKClientOperator
 from utils.kubeconfig import generate_gke_kube_config
 from utils.filters import (
     get_control_plane_host_from_tf_outputs,
@@ -98,7 +98,7 @@ data_dir = Path("/home/airflow/gcs/data")
     ),
 )
 def run_experiment():
-    @task(multiple_outputs=True)
+    @task
     def load_experiment(params: dict[str, str] | None = None) -> dict[str, str | dict[str, str]]:
         logger = logging.getLogger("airflow.task")
         experiment_id = params["experiment_id"]
@@ -289,22 +289,14 @@ def run_experiment():
         },
     )
 
-    @task(multiple_outputs=True)
-    def parse_terraform_output(outputs: dict[str, dict]) -> dict[str, str]:
-        return {
-            "cluster_name": outputs["gke"]["value"]["name"],
-            "cluster_region": outputs["gke"]["value"]["region"],
-            "armonik_control_plane_url": outputs["armonik"]["value"]["control_plane_url"],
-        }
-
-    parse_terraform_output = parse_terraform_output(terraform_output.output["return_value"])
-
     @task
     def get_kubeconfig(terraform_outputs):
-        return generate_gke_kube_config(
-            project_id="armonik-gcp-13469",
-            cluster_name=terraform_outputs["gke"]["value"]["name"],
-            cluster_location=terraform_outputs["gke"]["value"]["region"],
+        return json.dumps(
+            generate_gke_kube_config(
+                project_id="armonik-gcp-13469",
+                cluster_name=terraform_outputs["gke"]["value"]["name"],
+                cluster_location=terraform_outputs["gke"]["value"]["region"],
+            )
         )
 
     get_kubeconfig = get_kubeconfig(terraform_output.output["return_value"])
@@ -327,35 +319,10 @@ def run_experiment():
         extra=json.dumps({"auth_type": "NO_AUTH"}),
     )
 
-    run_client = GKEStartJobOperator(
+    run_client = RunArmoniKClientOperator(
         task_id="run_client",
-        location=parse_terraform_output["cluster_region"],
-        cluster_name=parse_terraform_output["cluster_name"],
-        name="run-client",
-        namespace="armonik",
-        labels={"app": "armonik", "service": "run-client", "type": "others"},
         image=load_experiment["workload_image"],
-        env_vars={
-            "GrpcClient__Endpoint": parse_terraform_output["armonik_control_plane_url"],
-            "HtcMock__NTasks": "10",
-            "HtcMock__TotalCalculationTime": "00:00:00.0",
-            "HtcMock__DataSize": "0",
-            "HtcMock__MemorySize": "0",
-            "HtcMock__SubTasksLevels": "2",
-            "HtcMock__EnableUseLowMem": "false",
-            "HtcMock__EnableSmallOutput": "false",
-            "HtcMock__EnableFastCompute": "false",
-            "HtcMock__Partition": "htcmock",
-        },
-        backoff_limit=1,
-        completion_mode="NonIndexed",
-        completions=1,
-        parallelism=1,
-        node_selector={"service": "others"},
-        tolerations=[k8s.V1Toleration(effect="NoSchedule", key="service", value="others")],
-        on_finish_action="delete_pod",
-        log_pod_spec_on_failure=True,
-        wait_until_job_complete=True,
+        config=load_experiment["workload_config"],
     )
 
     terraform_destroy = KubernetesPodOperator(
@@ -414,7 +381,6 @@ def run_experiment():
         >> terraform_init
         >> terraform_apply
         >> terraform_output
-        >> parse_terraform_output
         >> get_kubeconfig
         >> [update_kube_connection, update_armonik_connection]
         >> run_client
