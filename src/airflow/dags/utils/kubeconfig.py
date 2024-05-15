@@ -3,13 +3,13 @@ import google.auth
 from google.cloud.container_v1 import ClusterManagerClient
 
 
-def generate_gke_kube_config(project_id: str, cluster_name: str, location: str) -> dict:
+def generate_gke_kube_config(project_id: str, cluster_name: str, cluster_location: str) -> dict:
     """Generates Kubernetes configuration for a Google Kubernetes Engine (GKE) cluster.
 
     Args:
         project_id (str): The ID of the GCP project that the GKE cluster belongs to.
         cluster_name (str): The name of the GKE cluster.
-        location (str): The location of the GKE cluster (e.g., 'us-central1').
+        cluster_location (str): The location of the GKE cluster (e.g., 'us-central1').
 
     Returns:
         dict: Kubernetes configuration in dict format.
@@ -29,7 +29,7 @@ def generate_gke_kube_config(project_id: str, cluster_name: str, location: str) 
     cluster_manager_client = ClusterManagerClient(credentials=credentials)
 
     cluster = cluster_manager_client.get_cluster(
-        name=f"projects/{project_id}/locations/{location}/clusters/{cluster_name}"
+        name=f"projects/{project_id}/locations/{cluster_location}/clusters/{cluster_name}"
     )
 
     server = cluster.endpoint

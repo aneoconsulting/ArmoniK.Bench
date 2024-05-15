@@ -55,6 +55,10 @@ from kubernetes.client import models as k8s
 
 from operators.connections import UpdateAirflowConnectionOperator
 from utils.kubeconfig import generate_gke_kube_config
+from utils.filters import (
+    get_control_plane_host_from_tf_outputs,
+    get_control_plane_port_from_tf_outputs,
+)
 
 
 data_dir = Path("/home/airflow/gcs/data")
@@ -70,6 +74,10 @@ data_dir = Path("/home/airflow/gcs/data")
     doc_md=__doc__,
     # Jinja templating parameters
     render_template_as_native_obj=True,
+    user_defined_filters={
+        "ak_host_from_tf": get_control_plane_host_from_tf_outputs,
+        "ak_port_from_tf": get_control_plane_port_from_tf_outputs,
+    },
     # Scaling parameters
     max_active_tasks=int(os.environ.get("DAG__RUN_EXPERIMENT__MAX_ACTIVE_TASKS", 10)),
     max_active_runs=1,
@@ -292,12 +300,14 @@ def run_experiment():
     parse_terraform_output = parse_terraform_output(terraform_output.output["return_value"])
 
     @task
-    def get_kubeconfig(cluster_name: str, cluster_region: str):
-        return generate_gke_kube_config("armonik-gcp-13469", cluster_name, cluster_region)
+    def get_kubeconfig(terraform_outputs):
+        return generate_gke_kube_config(
+            project_id="armonik-gcp-13469",
+            cluster_name=terraform_outputs["gke"]["value"]["name"],
+            cluster_location=terraform_outputs["gke"]["value"]["region"],
+        )
 
-    get_kubeconfig = get_kubeconfig(
-        parse_terraform_output["cluster_name"], parse_terraform_output["cluster_region"]
-    )
+    get_kubeconfig = get_kubeconfig(terraform_output.output["return_value"])
 
     update_kube_connection = UpdateAirflowConnectionOperator(
         task_id="update_kube_connection",
@@ -305,6 +315,16 @@ def run_experiment():
         conn_type="kubernetes",
         description="Kubernetes connection for a remote ArmoniK cluster.",
         extra={"in_cluster": False, "kube_config": get_kubeconfig["return_value"]},
+    )
+
+    update_armonik_connection = UpdateAirflowConnectionOperator(
+        task_id="update_armonik_connection",
+        conn_id="armonik_default",
+        conn_type="grpc",
+        description="Connection to ArmoniK control plane.",
+        host="{{ti.xcom_pull(task_ids='terraform_output', key='return_value') | ak_host_from_tf}}",
+        port="{{ti.xcom_pull(task_ids='terraform_output', key='return_value') | ak_port_from_tf}}",
+        extra=json.dumps({"auth_type": "NO_AUTH"}),
     )
 
     run_client = GKEStartJobOperator(
@@ -396,7 +416,7 @@ def run_experiment():
         >> terraform_output
         >> parse_terraform_output
         >> get_kubeconfig
-        >> update_kube_connection
+        >> [update_kube_connection, update_armonik_connection]
         >> run_client
         >> terraform_destroy
     )
