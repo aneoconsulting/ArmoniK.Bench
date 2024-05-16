@@ -45,6 +45,8 @@ from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
 from airflow.models.param import Param
 
+from operators.run_experiments import RunExperiments
+
 
 data_dir = Path("/home/airflow/gcs/data")
 
@@ -89,7 +91,16 @@ def run_campaign():
         with (data_dir / f"campaigns/{campaign_id}").open() as f:
             return json.loads(f.read())["experiments"]
 
-    load_campaign()
+    load_campaign = load_campaign()
+
+    run_experiments = RunExperiments(
+        task_id="run_experiments",
+        experiment_ids=load_campaign["return_value"],
+        allowed_failures=0,
+        poke_interval=10,
+    )
+
+    load_campaign >> run_experiments
 
 
 run_campaign()
