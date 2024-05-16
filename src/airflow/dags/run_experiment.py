@@ -43,13 +43,12 @@ import json
 import logging
 import os
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowFailException
-from airflow.models.dagrun import DagRun
-from airflow.models.param import Param
+from airflow.models import DagRun, Param, Variable
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from kubernetes.client import models as k8s
 
@@ -58,19 +57,60 @@ from operators.dump import ArmoniKDumpData
 from operators.run_client import RunArmoniKClientOperator
 from operators.warm_up import ArmoniKServicesHealthCheckSensor, KubernetesNodesReadySensor
 
-from utils.kubeconfig import generate_gke_kube_config
+from utils import constants
 from utils.filters import (
     get_control_plane_host_from_tf_outputs,
     get_control_plane_port_from_tf_outputs,
 )
+from utils.kubeconfig import generate_gke_kube_config
 
 
-data_dir = Path("/home/airflow/gcs/data")
+data_dir = Path(constants.COMPOSER_CORE_DATA_DIR)
+
+terraform_pod_default_options = {
+    "image": constants.TF_IMAGE,
+    "namespace": constants.COMPOSER_K8S_USER_WORKLOAD_NAMESPACE,
+    "volume_mounts": [
+        k8s.V1VolumeMount(
+            mount_path=constants.USER_PV_MOUNT_PATH, name=constants.USER_PV_MOUNT_NAME
+        )
+    ],
+    "volumes": [
+        k8s.V1Volume(
+            name=constants.USER_PV_MOUNT_NAME,
+            persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+                claim_name=constants.USER_PVC_NAME
+            ),
+        )
+    ],
+    "reattach_on_restart": True,
+    "on_finish_action": "delete_succeeded_pod",
+    "config_file": constants.COMPOSER_K8S_KUBECONFIG,
+    "kubernetes_conn_id": constants.COMPOSER_K8S_CONN_ID,
+    "full_pod_spec": k8s.V1Pod(
+        spec=k8s.V1PodSpec(
+            containers=[
+                k8s.V1Container(
+                    working_dir=constants.TF_WORKDIR,
+                    name="base",
+                )
+            ]
+        )
+    ),
+    "env_vars": {
+        "TF_DATA_DIR": constants.TF_DATA_DIR,
+        "TF_PLUGIN_CACHE_DIR": constants.TF_PLUGIN_CACHE_DIR,
+        "TF_VAR_prefix": constants.TF_BACKEND_BUCKET,
+        "EXTRA_PARAMETERS_FILE": constants.TF_EXTRA_PARAMETERS_FILE,
+        "VERSIONS_FILE": constants.TF_VERSIONS_FILE,
+        "PARAMETERS_FILE": constants.TF_PARAMETERS_FILE,
+    },
+}
 
 
 @dag(
     dag_id="run_experiment",
-    start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    start_date=constants.DAG_DEFAULT_START_DATE,
     schedule=None,
     catchup=False,
     # UI parameters
@@ -83,14 +123,18 @@ data_dir = Path("/home/airflow/gcs/data")
         "ak_port_from_tf": get_control_plane_port_from_tf_outputs,
     },
     # Scaling parameters
-    max_active_tasks=int(os.environ.get("DAG__RUN_EXPERIMENT__MAX_ACTIVE_TASKS", 10)),
-    max_active_runs=1,
+    max_active_tasks=int(
+        os.environ.get(
+            "DAG__RUN_EXPERIMENT__MAX_ACTIVE_TASKS", constants.DAG_DEFAULT_MAX_ACTIVE_TASKS
+        )
+    ),
+    max_active_runs=constants.DAG_DEFAULT_MAX_ACTIVE_RUNS,
     # Other paramters
-    end_date=None,
+    end_date=constants.DAG_DEFAULT_END_DATE,
     default_args={
-        "owner": "airflow",
-        "retries": 1,
-        "retry_delay": timedelta(seconds=10),
+        "owner": constants.DAG_DEFAULT_ARGS_OWNER,
+        "retries": constants.DAG_DEFAULT_ARGS_RETRIES,
+        "retry_delay": constants.DAG_DEFAULT_ARGS_RETRY_DELAY,
     },
     params={
         "experiment_id": Param(
@@ -102,9 +146,9 @@ data_dir = Path("/home/airflow/gcs/data")
             type="boolean",
         ),
     },
-    dagrun_timeout=timedelta(
-        minutes=int(os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT", 300))
-    ),
+    dagrun_timeout=timedelta(minutes=int(os.environ["DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT"]))
+    if os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT", "")
+    else constants.DAG_DEFAULT_DAGRUN_TIMEMOUT,
 )
 def run_experiment():
     @task
@@ -121,9 +165,8 @@ def run_experiment():
             environment = json.loads(environment_file.read())
         with (data_dir / f"workloads/{experiment['workload']}").open() as workload_file:
             workload = json.loads(workload_file.read())
+        Variable.set(key="environment_type", value=environment["type"])
         return {
-            "infra_environment": environment["type"],
-            "infra_region": environment["region"],
             "infra_config": json.dumps(environment["config"]),
             "infra_worker_nodes": environment["config"]["gke"]["node_pools"][0]["node_count"],
             "repo_url": environment["repo_url"],
@@ -144,75 +187,42 @@ def run_experiment():
             r'f.write(os.environ[\"_PYTHON_SCRIPT\"]); f.close()" && '
             "python /tmp/workdir/setup.py"
         ],
-        namespace="composer-user-workloads",
-        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
-        volumes=[
-            k8s.V1Volume(
-                name="pvc-workdir-vol",
-                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                    claim_name="pvc-workdir"
-                ),
-            )
-        ],
-        reattach_on_restart=True,
-        on_finish_action="delete_succeeded_pod",
-        config_file="/home/airflow/composer_kube_config",
-        kubernetes_conn_id="kubernetes_default",
+        namespace=terraform_pod_default_options["namespace"],
+        volume_mounts=terraform_pod_default_options["volume_mounts"],
+        volumes=terraform_pod_default_options["volumes"],
+        reattach_on_restart=terraform_pod_default_options["reattach_on_restart"],
+        on_finish_action=terraform_pod_default_options["on_finish_action"],
+        config_file=terraform_pod_default_options["config_file"],
+        kubernetes_conn_id=terraform_pod_default_options["kubernetes_conn_id"],
         env_vars={
             "_PYTHON_SCRIPT": (Path(__file__).parent / "scripts/setup.py").open().read(),
+            "SETUP_SCRIPT__REPO_PATH": f"{constants.USER_PV_MOUNT_PATH}/ArmoniK",
+            "SETUP_SCRIPT__REPO_URL": load_experiment["repo_url"],
             "SETUP_SCRIPT__REPO_REF": load_experiment["repo_ref"],
             "SETUP_SCRIPT__AK_CONFIG": load_experiment["infra_config"],
-            "SETUP_SCRIPT__REPO_PATH": "/tmp/workdir/ArmoniK",
-            "SETUP_SCRIPT__REPO_URL": load_experiment["repo_url"],
-            "SETUP_SCRIPT__AK_ENVIRONMENT": load_experiment["infra_environment"],
+            "SETUP_SCRIPT__AK_ENVIRONMENT": "{{ var.value.environment_type }}",
         },
     )
 
     terraform_init = KubernetesPodOperator(
         task_id="terraform_init",
         name="terraform-init",
-        image="hashicorp/terraform:1.8",
         cmds=["terraform"],
-        arguments=["init", "-upgrade", "-reconfigure", "-backend-config=bucket=$(PREFIX)-tfstate"],
-        namespace="composer-user-workloads",
-        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
-        volumes=[
-            k8s.V1Volume(
-                name="pvc-workdir-vol",
-                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                    claim_name="pvc-workdir"
-                ),
-            )
+        arguments=[
+            "init",
+            "-upgrade",
+            "-reconfigure",
+            "-backend-config=bucket=$(TF_BACKEND_BUCKET)",
+            "-var-file=$(VERSIONS_FILE)",
+            "-var-file=$(PARAMETERS_FILE)",
+            "-var-file=$(EXTRA_PARAMETERS_FILE)",
         ],
-        reattach_on_restart=True,
-        on_finish_action="delete_succeeded_pod",
-        config_file="/home/airflow/composer_kube_config",
-        kubernetes_conn_id="kubernetes_default",
-        full_pod_spec=k8s.V1Pod(
-            spec=k8s.V1PodSpec(
-                containers=[
-                    k8s.V1Container(
-                        working_dir="/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp",
-                        name="terraform",
-                    )
-                ]
-            )
-        ),
-        env_vars={
-            "PREFIX": "airflow-bench",
-            "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
-            "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
-            "TF_VAR_region": load_experiment["infra_region"],
-            "TF_VAR_namespace": "armonik",
-            "TF_VAR_prefix": "airflow-bench",
-            "TF_VAR_project": "armonik-gcp-13469",
-        },
+        **terraform_pod_default_options,
     )
 
     terraform_apply = KubernetesPodOperator(
         task_id="terraform_apply",
         name="terraform-apply",
-        image="hashicorp/terraform:1.8",
         cmds=["terraform"],
         arguments=[
             "apply",
@@ -221,82 +231,22 @@ def run_experiment():
             "-var-file=$(EXTRA_PARAMETERS_FILE)",
             "-auto-approve",
         ],
-        namespace="composer-user-workloads",
-        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
-        volumes=[
-            k8s.V1Volume(
-                name="pvc-workdir-vol",
-                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                    claim_name="pvc-workdir"
-                ),
-            )
-        ],
-        reattach_on_restart=True,
-        on_finish_action="delete_succeeded_pod",
-        config_file="/home/airflow/composer_kube_config",
-        kubernetes_conn_id="kubernetes_default",
-        full_pod_spec=k8s.V1Pod(
-            spec=k8s.V1PodSpec(
-                containers=[
-                    k8s.V1Container(
-                        working_dir="/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp",
-                        name="terraform",
-                    )
-                ]
-            )
-        ),
-        env_vars={
-            "PREFIX": "airflow-bench",
-            "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
-            "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
-            "TF_VAR_region": load_experiment["infra_region"],
-            "TF_VAR_namespace": "armonik",
-            "TF_VAR_prefix": "airflow-bench",
-            "TF_VAR_project": "armonik-gcp-13469",
-            "EXTRA_PARAMETERS_FILE": "/tmp/workdir/ArmoniK/extra.tfvars.json",
-            "VERSIONS_FILE": "/tmp/workdir/ArmoniK/versions.tfvars.json",
-            "PARAMETERS_FILE": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/parameters.tfvars.json",
-        },
+        **terraform_pod_default_options,
     )
 
     terraform_output = KubernetesPodOperator(
         task_id="terraform_output",
         name="terraform-output",
-        image="hashicorp/terraform:1.8",
         cmds=["sh", "-c"],
         arguments=[
             "mkdir -p /airflow/xcom && terraform output -state=$(STATE_FILE) -json > /airflow/xcom/return.json"
         ],
-        namespace="composer-user-workloads",
-        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
-        volumes=[
-            k8s.V1Volume(
-                name="pvc-workdir-vol",
-                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                    claim_name="pvc-workdir"
-                ),
-            )
-        ],
-        reattach_on_restart=True,
-        do_xcom_push=True,
-        on_finish_action="delete_succeeded_pod",
-        config_file="/home/airflow/composer_kube_config",
-        kubernetes_conn_id="kubernetes_default",
-        full_pod_spec=k8s.V1Pod(
-            spec=k8s.V1PodSpec(
-                containers=[
-                    k8s.V1Container(
-                        working_dir="/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp",
-                        name="terraform",
-                    )
-                ]
-            )
-        ),
         env_vars={
-            "STATE_FILE": "armonik-terraform.tfstate",
-            "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
-            "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
+            "STATE_FILE": constants.TF_BACKEND_STATE_FILE,
+            "TF_DATA_DIR": constants.TF_DATA_DIR,
+            "TF_PLUGIN_CACHE_DIR": constants.TF_PLUGIN_CACHE_DIR,
         },
+        **{k: v for k, v in terraform_pod_default_options.items() if k != "env_vars"},
     )
 
     @task
@@ -370,7 +320,6 @@ def run_experiment():
     terraform_destroy = KubernetesPodOperator(
         task_id="terraform_destroy",
         name="terraform-destroy",
-        image="hashicorp/terraform:1.8",
         cmds=["terraform"],
         arguments=[
             "destroy",
@@ -379,42 +328,7 @@ def run_experiment():
             "-var-file=$(EXTRA_PARAMETERS_FILE)",
             "-auto-approve",
         ],
-        namespace="composer-user-workloads",
-        volume_mounts=[k8s.V1VolumeMount(mount_path="/tmp/workdir", name="pvc-workdir-vol")],
-        volumes=[
-            k8s.V1Volume(
-                name="pvc-workdir-vol",
-                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                    claim_name="pvc-workdir"
-                ),
-            )
-        ],
-        reattach_on_restart=True,
-        on_finish_action="delete_succeeded_pod",
-        config_file="/home/airflow/composer_kube_config",
-        kubernetes_conn_id="kubernetes_default",
-        full_pod_spec=k8s.V1Pod(
-            spec=k8s.V1PodSpec(
-                containers=[
-                    k8s.V1Container(
-                        working_dir="/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp",
-                        name="terraform",
-                    )
-                ]
-            )
-        ),
-        env_vars={
-            "PREFIX": "airflow-bench",
-            "TF_DATA_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated",
-            "TF_PLUGIN_CACHE_DIR": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/generated/terraform-plugins",
-            "TF_VAR_region": load_experiment["infra_region"],
-            "TF_VAR_namespace": "armonik",
-            "TF_VAR_prefix": "airflow-bench",
-            "TF_VAR_project": "armonik-gcp-13469",
-            "EXTRA_PARAMETERS_FILE": "/tmp/workdir/ArmoniK/extra.tfvars.json",
-            "VERSIONS_FILE": "/tmp/workdir/ArmoniK/versions.tfvars.json",
-            "PARAMETERS_FILE": "/tmp/workdir/ArmoniK/infrastructure/quick-deploy/gcp/parameters.tfvars.json",
-        },
+        **terraform_pod_default_options,
     )
 
     @task(trigger_rule="all_done")
