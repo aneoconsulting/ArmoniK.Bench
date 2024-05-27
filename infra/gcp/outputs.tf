@@ -1,6 +1,6 @@
 output "airflow_ui_uri" {
   description = "The URI of the Apache Airflow Web UI hosted within the composer environment"
-  value       = google_composer_environment.composer_environment.config[0].airflow_uri
+  value       = "${google_composer_environment.composer_environment.config[0].airflow_uri}/home"
 }
 
 

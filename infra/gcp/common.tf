@@ -25,8 +25,8 @@ locals {
   dags_path       = "${dirname(dirname(abspath(path.root)))}/src/airflow/dags"
   raw_dag_files   = fileset(local.dags_path, "**/*.py")
   dag_files = [
-    for file in local.raw_dag_files : file if length([
-      for pattern in local.ignore_patterns : file if length(regexall(pattern, file)) > 0
-    ]) == 0
+    for file in local.raw_dag_files : file if alltrue([
+      for pattern in local.ignore_patterns : !can(regex(pattern, file))
+    ])
   ]
 }

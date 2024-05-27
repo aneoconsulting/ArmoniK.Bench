@@ -1,18 +1,18 @@
 resource "google_composer_environment" "composer_environment" {
-  name    = var.environment.name
+  name    = var.environment_name
   project = local.project
   region  = local.region
 
   config {
-    environment_size = var.environment.size
+    environment_size = var.environment_size
     software_config {
-      image_version = var.environment.image
-      pypi_packages = var.environment.pypi_packages
-      env_variables = var.environment.env_variables
+      image_version = var.environment_version
+      pypi_packages = var.pypi_packages
+      env_variables = var.env_variables
     }
 
     node_config {
-      service_account = "${var.environment.service_account_name}@${local.project}.iam.gserviceaccount.com"
+      service_account = "${var.environment_service_account}@${local.project}.iam.gserviceaccount.com"
     }
   }
 }
@@ -60,9 +60,9 @@ resource "generic_local_cmd" "kubeconfig" {
   }
 }
 
-# Synchronises local DAG files with those in the Cloud Composer environment.
+# Synchronises DAG files in the Cloud Composer environment with local DAG files.
 resource "google_storage_bucket_object" "python_files" {
-  for_each = { for dag_file in local.dag_files : dag_file => dag_file }
+  for_each = toset(local.dag_files)
 
   name   = "dags/${each.value}"
   bucket = local.bucket_name
