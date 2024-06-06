@@ -5,18 +5,52 @@ variable "project" {
   default     = null
 }
 
-variable "environment" {
-  description = "Cloud Composer local environment configuration"
-  type = object({
-    name            = optional(string, "armonik-bench")
-    image_version   = optional(string, "composer-2.7.0-airflow-2.7.3")
-    pypi_packages   = optional(map(string), {})
-    env_variables   = optional(map(string), {})
-    airflow_ui_port = optional(number, 8080)
-    dags_path       = optional(string, "src/airflow/dags")
-    plugins_path    = optional(string, "src/airflow/plugins")
-    tests_path      = optional(string, "tests")
-  })
+variable "environment_name" {
+  description = "Cloud Composer local environment name."
+  type        = string
+  default     = "armonik-bench"
+}
+
+variable "environment_version" {
+  description = "Cloud Composer local environment version"
+  type        = string
+  default     = "composer-2.7.0-airflow-2.7.3"
+}
+
+variable "pypi_packages" {
+  description = "PyPi packages to install in the Cloud Composer local environment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "env_variables" {
+  description = "Environment variable to add to the Cloud Composer local environment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "airflow_ui_port" {
+  description = "Port used to expose the Airflow UI"
+  type        = number
+  default     = 8080
+}
+
+variable "dags_path" {
+  description = "Relative path of the folder containing the DAG files in the project tree."
+  type        = string
+  default     = "src/airflow/dags"
+}
+
+variable "plugins_path" {
+  description = "Relative path of the folder containing the Airflow plugins of the project in the project tree"
+  type        = string
+  default     = "src/airflow/plugins"
+}
+
+variable "tests_path" {
+  description = "Relative path of the folder containing the tests of the project in the project tree"
+  type        = string
+  default     = "tests"
 }
 
 variable "kubeconfig_path" {

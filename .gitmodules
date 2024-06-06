@@ -1,0 +1,3 @@
+[submodule "infra/localhost/composer-local-dev"]
+	path = infra/localhost/composer-local-dev
+	url = https://github.com/GoogleCloudPlatform/composer-local-dev.git
