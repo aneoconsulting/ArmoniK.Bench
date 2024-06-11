@@ -5,7 +5,7 @@ DAG_DEFAULT_START_DATE = datetime(2024, 1, 1, tzinfo=timezone.utc)
 DAG_DEFAULT_END_DATE = None
 DAG_DEFAULT_MAX_ACTIVE_TASKS = 10
 DAG_DEFAULT_MAX_ACTIVE_RUNS = 1
-DAG_DEFAULT_DAGRUN_TIMEMOUT = timedelta(hours=5)
+DAG_DEFAULT_DAGRUN_TIMEOUT = timedelta(hours=5)
 DAG_DEFAULT_ARGS_OWNER = "airflow"
 DAG_DEFAULT_ARGS_RETRIES = 2
 DAG_DEFAULT_ARGS_RETRY_DELAY = timedelta(seconds=10)
@@ -26,10 +26,11 @@ TF_IMAGE = "hashicorp/terraform:1.8"
 TF_WORKDIR = (
     f"{USER_PV_MOUNT_PATH}/ArmoniK/infrastructure/quick-deploy/" "{{ var.value.environment_type }}"
 )
-TF_DATA_DIR = (f"{TF_WORKDIR}/generated",)
-TF_PLUGIN_CACHE_DIR = (f"{TF_DATA_DIR}/terraform-plugins",)
-TF_BACKEND_BUCKET = "armonik-bench-tfstate-{{ var.value.environment_type }}"
-TF_BACKEND_STATE_FILE = "armonik-{{ var.value.environment_type }}.tfstate"
-TF_PARAMETERS_FILE = (f"{TF_WORKDIR}/parameters.tfvars.json",)
-TF_VERSIONS_FILE = (f"{USER_PV_MOUNT_PATH}/ArmoniK/versions.tfvars.json",)
-TF_EXTRA_PARAMETERS_FILE = (f"{USER_PV_MOUNT_PATH}/ArmoniK/extra.tfvars.json",)
+TF_DATA_DIR = f"{TF_WORKDIR}/generated"
+TF_PLUGIN_CACHE_DIR = f"{TF_DATA_DIR}/terraform-plugins"
+TF_BACKEND_BUCKET = "airflow-bench-tfstate"
+TF_BACKEND_STATE_FILE = "armonik-terraform.tfstate"
+TF_VAR_PREFIX = "ak-bench"
+TF_PARAMETERS_FILE = f"{TF_WORKDIR}/parameters.tfvars.json"
+TF_VERSIONS_FILE = f"{USER_PV_MOUNT_PATH}/ArmoniK/versions.tfvars.json"
+TF_EXTRA_PARAMETERS_FILE = f"{USER_PV_MOUNT_PATH}/ArmoniK/extra.tfvars.json"

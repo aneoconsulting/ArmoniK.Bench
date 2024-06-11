@@ -82,9 +82,9 @@ data_dir = Path(constants.COMPOSER_CORE_DATA_DIR)
             default="", description="ID of the campaign to be run by the workflow", type="string"
         ),
     },
-    dagrun_timeout=timedelta(minutes=int(os.environ["DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT"]))
-    if os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT", "")
-    else constants.DAG_DEFAULT_DAGRUN_TIMEMOUT,
+    dagrun_timeout=timedelta(minutes=int(os.environ["DAG__RUN_EXPERIMENT__DAGRUN_TIMEOUT"]))
+    if os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEOUT", "")
+    else constants.DAG_DEFAULT_DAGRUN_TIMEOUT,
 )
 def run_campaign():
     @task

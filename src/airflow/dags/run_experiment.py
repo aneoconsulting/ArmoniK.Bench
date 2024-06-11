@@ -49,11 +49,11 @@ from pathlib import Path
 from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowFailException
 from airflow.models import DagRun, Param, Variable
-from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from kubernetes.client import models as k8s
 
 from operators.connections import UpdateAirflowConnectionOperator
 from operators.dump import ArmoniKDumpData
+from operators.extra_templated import CustomKubernetesPodOperator as KubernetesPodOperator
 from operators.run_client import RunArmoniKClientOperator
 from operators.warm_up import ArmoniKServicesHealthCheckSensor, KubernetesNodesReadySensor
 
@@ -87,20 +87,12 @@ terraform_pod_default_options = {
     "on_finish_action": "delete_succeeded_pod",
     "config_file": constants.COMPOSER_K8S_KUBECONFIG,
     "kubernetes_conn_id": constants.COMPOSER_K8S_CONN_ID,
-    "full_pod_spec": k8s.V1Pod(
-        spec=k8s.V1PodSpec(
-            containers=[
-                k8s.V1Container(
-                    working_dir=constants.TF_WORKDIR,
-                    name="base",
-                )
-            ]
-        )
-    ),
+    "working_dir": constants.TF_WORKDIR,
     "env_vars": {
         "TF_DATA_DIR": constants.TF_DATA_DIR,
         "TF_PLUGIN_CACHE_DIR": constants.TF_PLUGIN_CACHE_DIR,
-        "TF_VAR_prefix": constants.TF_BACKEND_BUCKET,
+        "TF_BACKEND_BUCKET": constants.TF_BACKEND_BUCKET,
+        "TF_VAR_prefix": constants.TF_VAR_PREFIX,
         "EXTRA_PARAMETERS_FILE": constants.TF_EXTRA_PARAMETERS_FILE,
         "VERSIONS_FILE": constants.TF_VERSIONS_FILE,
         "PARAMETERS_FILE": constants.TF_PARAMETERS_FILE,
@@ -146,9 +138,9 @@ terraform_pod_default_options = {
             type="boolean",
         ),
     },
-    dagrun_timeout=timedelta(minutes=int(os.environ["DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT"]))
-    if os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT", "")
-    else constants.DAG_DEFAULT_DAGRUN_TIMEMOUT,
+    dagrun_timeout=timedelta(minutes=int(os.environ["DAG__RUN_EXPERIMENT__DAGRUN_TIMEOUT"]))
+    if os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEOUT", "")
+    else constants.DAG_DEFAULT_DAGRUN_TIMEOUT,
 )
 def run_experiment():
     @task
@@ -213,9 +205,6 @@ def run_experiment():
             "-upgrade",
             "-reconfigure",
             "-backend-config=bucket=$(TF_BACKEND_BUCKET)",
-            "-var-file=$(VERSIONS_FILE)",
-            "-var-file=$(PARAMETERS_FILE)",
-            "-var-file=$(EXTRA_PARAMETERS_FILE)",
         ],
         **terraform_pod_default_options,
     )
@@ -246,6 +235,7 @@ def run_experiment():
             "TF_DATA_DIR": constants.TF_DATA_DIR,
             "TF_PLUGIN_CACHE_DIR": constants.TF_PLUGIN_CACHE_DIR,
         },
+        do_xcom_push=True,
         **{k: v for k, v in terraform_pod_default_options.items() if k != "env_vars"},
     )
 
