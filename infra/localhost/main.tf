@@ -6,10 +6,11 @@ resource "docker_container" "composer_local_environment" {
   env         = concat(local.composer_default_env_vars, local.user_env_vars)
   memory      = 4096
   working_dir = local.airflow_home
-  ports {
-    internal = 8080
-    external = var.airflow_ui_port
-  }
+  # ports {
+  #   internal = 8080
+  #   external = var.airflow_ui_port
+  # }
+  network_mode = "host"
   mounts {
     type   = "bind"
     target = local.dags_target_path
@@ -45,6 +46,96 @@ resource "docker_container" "composer_local_environment" {
   }
 }
 
+resource "kubernetes_namespace" "k8s_namespace" {
+  metadata {
+    name = local.k8s_namespace
+  }
+}
+
+resource "kubernetes_service_account" "terraform_sa" {
+  metadata {
+    name      = "terraform-sa"
+    namespace = local.k8s_namespace
+  }
+}
+
+resource "kubernetes_cluster_role" "terraform_cr" {
+  metadata {
+    name = "terraform-cr"
+  }
+
+  rule {
+    api_groups = ["*"]
+    resources  = ["*"]
+    verbs      = ["*"]
+  }
+}
+
+resource "kubernetes_cluster_role_binding" "terraform_crb" {
+  metadata {
+    name = "terraform-crb"
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = kubernetes_cluster_role.terraform_cr.metadata[0].name
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account.terraform_sa.metadata[0].name
+    namespace = local.k8s_namespace
+  }
+}
+
+resource "kubernetes_persistent_volume" "pv_workdir" {
+  metadata {
+    name = "pv-workdir"
+  }
+
+  spec {
+    access_modes = ["ReadWriteOnce"]
+
+    capacity = {
+      storage = "1Gi"
+    }
+
+    persistent_volume_source {
+      host_path {
+        path = "/tmp/workdir"
+        type = "DirectoryOrCreate"
+      }
+    }
+
+    persistent_volume_reclaim_policy = "Delete"
+
+    storage_class_name = "local-path"
+
+  }
+}
+
+resource "kubernetes_persistent_volume_claim" "pvc_workdir" {
+  depends_on       = [kubernetes_persistent_volume.pv_workdir]
+  wait_until_bound = true
+  metadata {
+    name      = "pvc-workdir"
+    namespace = local.k8s_namespace
+  }
+
+  spec {
+    access_modes = ["ReadWriteOnce"]
+
+    resources {
+      requests = {
+        storage = "1Gi"
+      }
+    }
+
+    volume_name = kubernetes_persistent_volume.pv_workdir.metadata[0].name
+  }
+}
+
 data "generic_local_cmd" "home" {
   read "path" {
     cmd = "echo $HOME"
@@ -73,9 +164,9 @@ locals {
   project = coalesce(var.project, data.generic_local_cmd.gcloud_project.outputs.project)
 
   version_pattern = "composer-([1-9]+\\.[0-9]+\\.[0-9]+)-airflow-([1-9]+[\\.|-][0-9]+[\\.|-][0-9]+)"
-  airflow_v  = replace(regex(local.version_pattern, var.environment_version)[1], ".", "-")
-  composer_v = regex(local.version_pattern, var.environment_version)[0]
-  image_tag  = "us-docker.pkg.dev/cloud-airflow-releaser/airflow-worker-scheduler-${local.airflow_v}/airflow-worker-scheduler-${local.airflow_v}:composer-${local.composer_v}-airflow-${local.airflow_v}"
+  airflow_v       = replace(regex(local.version_pattern, var.environment_version)[1], ".", "-")
+  composer_v      = regex(local.version_pattern, var.environment_version)[0]
+  image_tag       = "us-docker.pkg.dev/cloud-airflow-releaser/airflow-worker-scheduler-${local.airflow_v}/airflow-worker-scheduler-${local.airflow_v}:composer-${local.composer_v}-airflow-${local.airflow_v}"
 
   user_home_path            = data.generic_local_cmd.home.outputs.path
   tf_root_path              = abspath(path.root)
@@ -91,7 +182,7 @@ locals {
   dags_target_path          = "${local.airflow_home}/gcs/dags"
   plugins_target_path       = "${local.airflow_home}/gcs/plugins"
   tests_target_path         = "${local.airflow_home}/gcs/tests"
-  kubeconfig_target_path    = "${local.airflow_home}/composer_kubeconfig"
+  kubeconfig_target_path    = "${local.airflow_home}/composer_kube_config"
   gcloud_config_target_path = "${local.airflow_home}/.config/gcloud"
   data_target_path          = "${local.airflow_home}/gcs/data"
   entrypoint_target_path    = "${local.airflow_home}/entrypoint.sh"
@@ -118,4 +209,5 @@ locals {
   ]
 
   user_env_vars = [for key, value in var.env_variables : "${key}=${value}"]
+  k8s_namespace = "composer-user-workloads"
 }

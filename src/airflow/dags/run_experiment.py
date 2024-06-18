@@ -51,7 +51,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.models import DagRun, Param, Variable
 from kubernetes.client import models as k8s
 
-from operators.connections import UpdateAirflowConnectionOperator
+from operators.connections import UpdateAirflowConnectionOperator, UpdateArmoniKClusterConnectionOperator
 from operators.dump import ArmoniKDumpData
 from operators.extra_templated import CustomKubernetesPodOperator as KubernetesPodOperator
 from operators.run_client import RunArmoniKClientOperator
@@ -61,11 +61,12 @@ from utils import constants
 from utils.filters import (
     get_control_plane_host_from_tf_outputs,
     get_control_plane_port_from_tf_outputs,
+    get_kubernetes_cluster_arn_from_tf_output,
 )
-from utils.kubeconfig import generate_gke_kube_config
 
 
 data_dir = Path(constants.COMPOSER_CORE_DATA_DIR)
+context = os.environ["ARMONIK_BENCH__CONTEXT"]
 
 terraform_pod_default_options = {
     "image": constants.TF_IMAGE,
@@ -97,6 +98,7 @@ terraform_pod_default_options = {
         "VERSIONS_FILE": constants.TF_VERSIONS_FILE,
         "PARAMETERS_FILE": constants.TF_PARAMETERS_FILE,
     },
+    "service_account_name": "terraform-sa" if context == "local" else None,
 }
 
 
@@ -113,6 +115,7 @@ terraform_pod_default_options = {
     user_defined_filters={
         "ak_host_from_tf": get_control_plane_host_from_tf_outputs,
         "ak_port_from_tf": get_control_plane_port_from_tf_outputs,
+        "ak_cluster_arn_from_tf": get_kubernetes_cluster_arn_from_tf_output,
     },
     # Scaling parameters
     max_active_tasks=int(
@@ -158,9 +161,16 @@ def run_experiment():
         with (data_dir / f"workloads/{experiment['workload']}").open() as workload_file:
             workload = json.loads(workload_file.read())
         Variable.set(key="environment_type", value=environment["type"])
+
+        if environment["type"] == "localhost":
+            infra_worker_nodes = 0
+        elif environment["type"] == "gcp": 
+            infra_worker_nodes = environment["config"]["gke"]["node_pools"][0]["node_count"]
+        else:
+            raise ValueError(f"Environment not supported {environment['type']}.")
         return {
             "infra_config": json.dumps(environment["config"]),
-            "infra_worker_nodes": environment["config"]["gke"]["node_pools"][0]["node_count"],
+            "infra_worker_nodes": infra_worker_nodes,
             "repo_url": environment["repo_url"],
             "repo_ref": environment["repo_ref"],
             "workload_image": workload["image"],
@@ -193,6 +203,7 @@ def run_experiment():
             "SETUP_SCRIPT__REPO_REF": load_experiment["repo_ref"],
             "SETUP_SCRIPT__AK_CONFIG": load_experiment["infra_config"],
             "SETUP_SCRIPT__AK_ENVIRONMENT": "{{ var.value.environment_type }}",
+            "SETUP_SCRIPT__CONTEXT": context,
         },
     )
 
@@ -204,7 +215,6 @@ def run_experiment():
             "init",
             "-upgrade",
             "-reconfigure",
-            "-backend-config=bucket=$(TF_BACKEND_BUCKET)",
         ],
         **terraform_pod_default_options,
     )
@@ -239,24 +249,11 @@ def run_experiment():
         **{k: v for k, v in terraform_pod_default_options.items() if k != "env_vars"},
     )
 
-    @task
-    def get_kubeconfig(terraform_outputs):
-        return json.dumps(
-            generate_gke_kube_config(
-                project_id="armonik-gcp-13469",
-                cluster_name=terraform_outputs["gke"]["value"]["name"],
-                cluster_location=terraform_outputs["gke"]["value"]["region"],
-            )
-        )
-
-    get_kubeconfig = get_kubeconfig(terraform_output.output["return_value"])
-
-    update_kube_connection = UpdateAirflowConnectionOperator(
+    update_kube_connection = UpdateArmoniKClusterConnectionOperator(
         task_id="update_kube_connection",
         conn_id="armonik_kubernetes_default",
-        conn_type="kubernetes",
         description="Kubernetes connection for a remote ArmoniK cluster.",
-        extra={"in_cluster": False, "kube_config": get_kubeconfig["return_value"]},
+        cluster_arn="{{ti.xcom_pull(task_ids='terraform_output', key='return_value') | ak_cluster_arn_from_tf}}",
     )
 
     update_armonik_connection = UpdateAirflowConnectionOperator(
@@ -346,7 +343,6 @@ def run_experiment():
         >> terraform_init
         >> terraform_apply
         >> terraform_output
-        >> get_kubeconfig
         >> [update_kube_connection, update_armonik_connection]
         >> warm_up
         >> run_client
