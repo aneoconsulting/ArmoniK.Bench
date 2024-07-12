@@ -97,9 +97,13 @@ terraform_pod_default_options = {
         "EXTRA_PARAMETERS_FILE": constants.TF_EXTRA_PARAMETERS_FILE,
         "VERSIONS_FILE": constants.TF_VERSIONS_FILE,
         "PARAMETERS_FILE": constants.TF_PARAMETERS_FILE,
+        "AWS_ACCESS_KEY_ID": os.environ["AWS_ACCESS_KEY_ID"],
+        "AWS_SECRET_ACCESS_KEY": os.environ["AWS_SECRET_ACCESS_KEY"],
     },
-    "service_account_name": "terraform-sa" if context == "local" else None,
 }
+
+if context == "local":
+    terraform_pod_default_options["service_account_name"] = "terraform-sa"
 
 
 @dag(
@@ -166,6 +170,8 @@ def run_experiment():
             infra_worker_nodes = 0
         elif environment["type"] == "gcp": 
             infra_worker_nodes = environment["config"]["gke"]["node_pools"][0]["node_count"]
+        elif environment["type"] == "aws":
+            infra_worker_nodes = 1
         else:
             raise ValueError(f"Environment not supported {environment['type']}.")
         return {

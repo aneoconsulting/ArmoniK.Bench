@@ -1,3 +1,21 @@
+resource "docker_container" "db" {
+  name         = local.db_container_name
+  image        = "postgres:${var.db_version}"
+  restart      = "always"
+  # network_mode = "host"
+  ports {
+    internal = 5432
+    external = 3225
+  }
+  memory       = 128
+  env = [
+    "POSTGRES_USER=${var.db_user}",
+    "POSTGRES_PASSWORD=${var.db_password}",
+    "POSTGRES_DB=${var.db_name}",
+  ]
+}
+
+
 resource "docker_container" "composer_local_environment" {
   name        = var.environment_name
   image       = local.image_tag
@@ -160,8 +178,33 @@ data "generic_local_cmd" "gcloud_project" {
   }
 }
 
+data "generic_local_cmd" "aws_access_key_id" {
+  read "secret" {
+    cmd = "gcloud secrets versions access 1 --secret=armonik-bench-aws-access-key"
+  }
+}
+
+data "generic_local_cmd" "aws_secret_access_key" {
+  read "secret" {
+    cmd = "gcloud secrets versions access 1 --secret=armonik-bench-aws-secret-access-key"
+  }
+}
+
+# data "google_secret_manager_secret_version" "aws_access_key_id" {
+#   secret  = "armonik-bench-aws-access-key"
+#   project = local.project
+# }
+
+# data "google_secret_manager_secret_version" "aws_secret_access_key" {
+#   secret  = "armonik-bench-aws-secret-access-key"
+#   version = "latest"
+#   project = local.project
+# }
+
 locals {
   project = coalesce(var.project, data.generic_local_cmd.gcloud_project.outputs.project)
+
+  db_container_name = "${var.environment_name}-db"
 
   version_pattern = "composer-([1-9]+\\.[0-9]+\\.[0-9]+)-airflow-([1-9]+[\\.|-][0-9]+[\\.|-][0-9]+)"
   airflow_v       = replace(regex(local.version_pattern, var.environment_version)[1], ".", "-")
@@ -193,6 +236,9 @@ locals {
     "AIRFLOW__API__AUTH_BACKEND=airflow.api.auth.backend.default",
     "AIRFLOW__WEBSERVER__EXPOSE_CONFIG=true",
     "AIRFLOW__CORE__LOAD_EXAMPLES=false",
+    "AIRFLOW__CORE__EXECUTOR=LocalExecutor",
+    "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${var.db_user}:${var.db_password}@127.0.0.1:3225/${var.db_name}",
+    "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=False",
     "AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=10",
     "AIRFLOW__CORE__DAGS_FOLDER=${local.dags_target_path}",
     "AIRFLOW__CORE__PLUGINS_FOLDER=${local.plugins_target_path}",
@@ -206,6 +252,9 @@ locals {
     "COMPOSER_HOST_USER_ID=${data.generic_local_cmd.id.outputs.uid}",
     "AIRFLOW_HOME=${local.airflow_home}/airflow",
     "AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT=google-cloud-platform://?extra__google_cloud_platform__project=${local.project}&extra__google_cloud_platform__scope=https://www.googleapis.com/auth/cloud-platform",
+    # AWS credentials
+    "AWS_ACCESS_KEY_ID=${data.generic_local_cmd.aws_access_key_id.outputs.secret}",
+    "AWS_SECRET_ACCESS_KEY=${data.generic_local_cmd.aws_secret_access_key.outputs.secret}",
   ]
 
   user_env_vars = [for key, value in var.env_variables : "${key}=${value}"]

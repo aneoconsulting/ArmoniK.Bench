@@ -106,7 +106,8 @@ def swap_terraform_backend_and_providers(repo_path: pathlib.Path, environment: s
 
     with (repo_path / f"infrastructure/quick-deploy/{environment}/backend.tf").open("w") as f:
         f.write(textwrap.dedent(backend_data))
-    (repo_path / f"infrastructure/quick-deploy/{environment}/providers.tf").unlink(missing_ok=False)
+    if environment == "localhost":
+        (repo_path / f"infrastructure/quick-deploy/{environment}/providers.tf").unlink(missing_ok=False)
 
 
 def download_terraform_modules(repo_path: pathlib.Path, environment: str) -> None:
@@ -148,7 +149,7 @@ def main():
         config = json.loads(os.environ["SETUP_SCRIPT__AK_CONFIG"])
         context = os.environ["SETUP_SCRIPT__CONTEXT"]
 
-        if environment not in ["localhost", "gcp"]:
+        if environment not in ["localhost", "gcp", "aws"]:
             raise ValueError(f"Deployment environment {environment} not supported.")
 
     except KeyError as error:

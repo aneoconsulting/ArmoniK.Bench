@@ -15,4 +15,5 @@ pypi_packages = {
 
 env_variables = {
   DAGS__RUN_EXPERIMENT__DEPLOY_WORKDIR = "/tmp/workdir"
+  ARMONIK_BENCH__CONTEXT               = "gcp"
 }
