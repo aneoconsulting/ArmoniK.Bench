@@ -26,13 +26,13 @@ variable "environment_version" {
 
 variable "environment_size" {
   description = "Cloud Composer environment size"
-  type = string
-  default = "ENVIRONMENT_SIZE_SMALL"
+  type        = string
+  default     = "ENVIRONMENT_SIZE_SMALL"
 }
 
 variable "environment_service_account" {
   description = "Name of the service account associated to the Cloud Composer environment"
-  type = string
+  type        = string
 }
 
 variable "pypi_packages" {

@@ -5,6 +5,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import textwrap
 
 
 def clone_repo(repo_path: pathlib.Path, repo_url: str, ref: str) -> None:
@@ -72,6 +73,43 @@ def edit_default_parameters_file(repo_path: pathlib.Path, environment: str, conf
     parameters_file.rename(parameters_file.with_suffix(".tfvars.json"))
 
 
+def swap_terraform_backend_and_providers(repo_path: pathlib.Path, environment: str, context: str) -> None:
+    """Swap default Terraform backend and providers to enable deployment from within a Kubernetes pod.
+    
+    Parameters
+    ----------
+    repo_path : pathlib.Path
+        Path to a local clone of the repository hosting the ArmoniK project.
+    environment : str
+        Deployment environment ('locahost', 'aws', 'gcp').
+    context : str
+        Weither the ArmoniK Bench application is running in development environment or in production.
+    """
+    if context == "local":
+        backend_data = """
+            terraform {
+                backend "kubernetes" {
+                    secret_suffix    = "armonik-terraform.tfstate"
+                    in_cluster_config = true
+                }
+            }
+        """
+    else:
+        backend_data = """
+            terraform {
+                backend "gcs" {
+                    prefix = "armonik-terraform.tfstate"
+                    bucket = "airflow-bench-tfstate"
+                }
+            }
+        """
+
+    with (repo_path / f"infrastructure/quick-deploy/{environment}/backend.tf").open("w") as f:
+        f.write(textwrap.dedent(backend_data))
+    if environment == "localhost":
+        (repo_path / f"infrastructure/quick-deploy/{environment}/providers.tf").unlink(missing_ok=False)
+
+
 def download_terraform_modules(repo_path: pathlib.Path, environment: str) -> None:
     """Download ArmoniK Terraform modules based on the configuration provided in the 'versions'
     file of ArmoniK repository already cloned.
@@ -109,8 +147,9 @@ def main():
         repo_ref = os.environ["SETUP_SCRIPT__REPO_REF"]
         environment = os.environ["SETUP_SCRIPT__AK_ENVIRONMENT"]
         config = json.loads(os.environ["SETUP_SCRIPT__AK_CONFIG"])
+        context = os.environ["SETUP_SCRIPT__CONTEXT"]
 
-        if environment not in ["localhost", "gcp"]:
+        if environment not in ["localhost", "gcp", "aws"]:
             raise ValueError(f"Deployment environment {environment} not supported.")
 
     except KeyError as error:
@@ -128,6 +167,8 @@ def main():
     clone_repo(repo_path=repo_path, repo_url=repo_url, ref=repo_ref)
     LOG.info(f"Editing default parameters file for {environment} deployment.")
     edit_default_parameters_file(repo_path=repo_path, environment=environment, config=config)
+    LOG.info("Replacing default Terraform backend.")
+    swap_terraform_backend_and_providers(repo_path=repo_path, environment=environment, context=context)
     LOG.info("Downloading ArmoniK's Terraform modules...")
     download_terraform_modules(repo_path=repo_path, environment=environment)
 

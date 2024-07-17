@@ -2,8 +2,7 @@ import uuid
 
 from typing import Sequence
 
-from airflow.models.connection import Connection
-from airflow.models.taskinstance import TaskInstance
+from airflow.models import Connection, TaskInstance, Variable
 from airflow.providers.cncf.kubernetes.operators.job import KubernetesJobOperator
 from airflow.utils.context import Context
 from kubernetes.client import models as k8s
@@ -29,8 +28,6 @@ class RunArmoniKClientOperator(KubernetesJobOperator):
             completion_mode="NonIndexed",
             completions=1,
             parallelism=1,
-            node_selector={"service": "others"},
-            tolerations=[k8s.V1Toleration(effect="NoSchedule", key="service", value="others")],
             on_finish_action="delete_pod",
             wait_until_job_complete=True,
             kubernetes_conn_id=armonik_kubernetes_conn_id,
@@ -59,5 +56,10 @@ class RunArmoniKClientOperator(KubernetesJobOperator):
 
         ti: TaskInstance = context["ti"]
         ti.xcom_push(key="job_uuid", value=job_uuid)
+
+        environment_type = Variable.get(key="environment_type")
+        if environment_type == "gcp" or environment_type == "aws":
+            self.node_selector = {"service": "others"},
+            self.tolerations = [k8s.V1Toleration(effect="NoSchedule", key="service", value="others")],
 
         return super().execute(context)

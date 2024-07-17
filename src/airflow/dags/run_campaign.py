@@ -38,7 +38,7 @@ with the Cloud Composer environment.
 import json
 import os
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 
 from airflow.decorators import dag, task
@@ -47,13 +47,15 @@ from airflow.models.param import Param
 
 from operators.run_experiments import RunExperiments
 
+from utils import constants
 
-data_dir = Path("/home/airflow/gcs/data")
+
+data_dir = Path(constants.COMPOSER_CORE_DATA_DIR)
 
 
 @dag(
     dag_id="run_campaign",
-    start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    start_date=constants.DAG_DEFAULT_START_DATE,
     schedule=None,
     catchup=False,
     # UI parameters
@@ -62,23 +64,27 @@ data_dir = Path("/home/airflow/gcs/data")
     # Jinja templating parameters
     render_template_as_native_obj=True,
     # Scaling parameters
-    max_active_tasks=int(os.environ.get("DAG__RUN_CAMPAIGN__MAX_ACTIVE_TASKS", 10)),
-    max_active_runs=1,
+    max_active_tasks=int(
+        os.environ.get(
+            "DAG__RUN_CAMPAIGN__MAX_ACTIVE_TASKS", constants.DAG_DEFAULT_MAX_ACTIVE_TASKS
+        )
+    ),
+    max_active_runs=constants.DAG_DEFAULT_MAX_ACTIVE_RUNS,
     # Other paramters
-    end_date=None,
+    end_date=constants.DAG_DEFAULT_END_DATE,
     default_args={
-        "owner": "airflow",
-        "retries": 3,
-        "retry_delay": timedelta(seconds=10),
+        "owner": constants.DAG_DEFAULT_ARGS_OWNER,
+        "retries": constants.DAG_DEFAULT_ARGS_RETRIES,
+        "retry_delay": constants.DAG_DEFAULT_ARGS_RETRY_DELAY,
     },
     params={
         "campaign_id": Param(
             default="", description="ID of the campaign to be run by the workflow", type="string"
         ),
     },
-    dagrun_timeout=timedelta(
-        minutes=int(os.environ.get("DAG__RUN_CAMPAIGN__DAGRUN_TIMEMOUT", 300))
-    ),
+    dagrun_timeout=timedelta(minutes=int(os.environ["DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT"]))
+    if os.environ.get("DAG__RUN_EXPERIMENT__DAGRUN_TIMEMOUT", "")
+    else constants.DAG_DEFAULT_DAGRUN_TIMEMOUT,
 )
 def run_campaign():
     @task

@@ -42,3 +42,21 @@ def get_control_plane_port_from_tf_outputs(terraform_outputs: dict[str, Any]) ->
         str: ArmoniK control plane port.
     """
     return _get_control_plane_url_without_prefix(terraform_outputs).split(":")[1]
+
+
+def get_kubernetes_cluster_arn_from_tf_output(terraform_outputs: dict[str, Any]) -> str:
+    """
+    Get ArmoniK Kubernetes cluster ARN (unique identifier) from Terraform outputs.
+
+    Args:
+        terraform_outputs (dict[str, Any]): Terraform outputs dictionary.
+
+    Returns:
+        str: ArmoniK Kubernetes cluster ARN.
+    """
+    if "gke" in terraform_outputs.keys():
+        return terraform_outputs["gke"]["value"]["arn"]
+    elif "aws" in terraform_outputs.keys():
+        return terraform_outputs["aws"]["value"]["arn"]
+    else:
+        return ""

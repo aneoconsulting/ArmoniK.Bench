@@ -64,3 +64,27 @@ variable "gcloud_config_path" {
   type        = string
   default     = ".config/gcloud"
 }
+
+variable "db_version" {
+  description = "Version of the official Postgres Docker image."
+  type        = string
+  default     = "latest"
+}
+
+variable "db_user" {
+  description = "Database user name."
+  type        = string
+  default     = "airflow"
+}
+
+variable "db_password" {
+  description = "Database user password."
+  type        = string
+  default     = "pass"
+}
+
+variable "db_name" {
+  description = "Default database name."
+  type        = string
+  default     = "airflow_db"
+}
